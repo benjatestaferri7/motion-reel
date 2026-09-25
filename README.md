@@ -19,6 +19,28 @@ An agent skill that builds **spectacular, motion-designer-grade websites and cod
 
 To use it in a single project only, clone it into `<project>/.claude/skills/motion-reel` instead.
 
+## One-prompt setup (no manual install)
+
+Paste this into Claude Code, replacing the path with your site's folder:
+
+```text
+Clone https://github.com/benjatestaferri7/motion-reel into ~/.claude/skills/motion-reel,
+then use the motion-reel skill to redesign the website in ./my-site
+```
+
+**How it works:** Claude Code does not load skills straight from a URL. This prompt asks Claude to install the skill first and then follow it, so it behaves exactly like a manual install.
+
+What happens next, every time:
+
+1. Claude reads your site's files.
+2. It asks for the **style**: Swiss Kinetic, Riso Shader, Hybrid, or **Surprise me**.
+3. It asks for the **palette**: brand color, a preset, or **Surprise me**. With Surprise me it infers your industry and tone from your README, copy, and CSS, picks a palette, tells you why, and offers one re-roll.
+4. It builds the result, checks it with headless screenshots, and reports anything it could not verify.
+
+No code is written until both questions are answered.
+
+> Pointing Claude at the repo URL without asking it to install also usually works, because Claude reads `SKILL.md` and follows it. It is less reliable, though: the skill won't auto-trigger in later requests. Prefer the prompt above.
+
 ## What it can make
 
 | Output | Examples |

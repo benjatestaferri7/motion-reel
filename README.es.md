@@ -19,6 +19,28 @@ Una skill para agentes que crea **sitios web y videos generados con código, con
 
 Si la querés solo para un proyecto, cloná la skill en `<proyecto>/.claude/skills/motion-reel`.
 
+## Todo en un solo prompt (sin instalar a mano)
+
+Pegá esto en Claude Code, reemplazando la ruta por la carpeta de tu sitio:
+
+```text
+Cloná https://github.com/benjatestaferri7/motion-reel en ~/.claude/skills/motion-reel
+y después usá la skill motion-reel para rediseñar la web que está en ./mi-sitio
+```
+
+**Cómo funciona:** Claude Code no carga skills directamente desde una URL. Este prompt le pide a Claude que primero instale la skill y después la siga, así que funciona igual que una instalación manual.
+
+Lo que pasa después, siempre:
+
+1. Claude lee los archivos de tu sitio.
+2. Te pregunta el **estilo**: Swiss Kinetic, Riso Shader, Híbrido o **Sorprendeme**.
+3. Te pregunta la **paleta**: color de marca, un preset o **Sorprendeme**. Con Sorprendeme deduce el rubro y el tono a partir de tu README, tus textos y tu CSS, elige una paleta, te explica por qué y te ofrece volver a sortear una vez.
+4. Construye el resultado, lo verifica con capturas automáticas y te avisa lo que no pudo verificar.
+
+No escribe código hasta que respondas las dos preguntas.
+
+> Si solo le pasás la URL del repo sin pedirle que la instale, normalmente también funciona, porque Claude lee el `SKILL.md` y lo sigue. Pero es menos confiable: la skill no se activa sola en los pedidos siguientes. Conviene usar el prompt de arriba.
+
 ## Qué puede hacer
 
 | Salida | Ejemplos |
