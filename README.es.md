@@ -41,6 +41,27 @@ No escribe código hasta que respondas las dos preguntas.
 
 > Si solo le pasás la URL del repo sin pedirle que la instale, normalmente también funciona, porque Claude lee el `SKILL.md` y lo sigue. Pero es menos confiable: la skill no se activa sola en los pedidos siguientes. Conviene usar el prompt de arriba.
 
+## Otros agentes
+
+motion-reel sigue el formato abierto [Agent Skills](https://agentskills.io) (`SKILL.md` más `references/` y `assets/`), así que no depende de Claude Code. Lo único que cambia es la carpeta donde se instala:
+
+| Agente | Instalación global | Instalación por proyecto | Cómo invocarla |
+|--------|--------------------|--------------------------|----------------|
+| Claude Code | `~/.claude/skills/motion-reel` | `.claude/skills/motion-reel` | Pedíselo con tus palabras, o `/motion-reel` |
+| OpenAI Codex | `~/.agents/skills/motion-reel` | `.agents/skills/motion-reel` | Pedíselo con tus palabras, o `$motion-reel` |
+
+Instalación en Codex:
+
+```bash
+git clone https://github.com/benjatestaferri7/motion-reel ~/.agents/skills/motion-reel
+```
+
+No hace falta ningún flag: Codex detecta solo las skills de esas carpetas ([documentación](https://learn.chatgpt.com/docs/build-skills)). Algunas guías viejas mencionan `~/.codex/skills`, pero la documentación actual usa `~/.agents/skills`.
+
+En cualquier otro agente compatible con Agent Skills (Gemini CLI, GitHub Copilot, Cursor y otros), cloná el repo en la carpeta de skills que indique la documentación de ese agente.
+
+> Probada de punta a punta en Claude Code. Los demás agentes usan el mismo estándar y la skill no tiene instrucciones exclusivas de Claude, pero todavía no se verificó cómo se comporta en ellos. Los issues y reportes son bienvenidos.
+
 ## Qué puede hacer
 
 | Salida | Ejemplos |
