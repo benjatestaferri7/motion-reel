@@ -1,0 +1,416 @@
+{
+  "version": 1,
+  "roles": {
+    "ink": "system field: near-black, never #000",
+    "bone": "human field: off-white, never #FFF",
+    "action": "statement field: hottest brand color",
+    "machine": "proof/data field: counter hue to action"
+  },
+  "presets": [
+    {
+      "name": "signal",
+      "label": "Signal (reference reel)",
+      "tags": [
+        "agency",
+        "studio",
+        "tech",
+        "launch",
+        "bold",
+        "energetic",
+        "showreel",
+        "product"
+      ],
+      "ink": "#0B0B0D",
+      "bone": "#EDEAE3",
+      "action": "#FF3B1F",
+      "machine": "#2B35FF",
+      "fontPairing": {
+        "display": "Archivo",
+        "wdth": [
+          62,
+          125
+        ],
+        "mono": "Space Mono",
+        "body": "Hanken Grotesk"
+      },
+      "notes": "The reference reel. Red-orange takes ink text, ultramarine takes bone text. Never put action and machine against each other as text/background."
+    },
+    {
+      "name": "acid",
+      "label": "Acid (lime / ultramarine)",
+      "tags": [
+        "crypto",
+        "gaming",
+        "web3",
+        "music",
+        "loud",
+        "youth",
+        "rave",
+        "devtools"
+      ],
+      "ink": "#0C0D0A",
+      "bone": "#F0EFE7",
+      "action": "#D4F53C",
+      "machine": "#2331D6",
+      "fontPairing": {
+        "display": "Unbounded",
+        "wdth": null,
+        "mono": "Space Mono",
+        "body": "Space Grotesk"
+      },
+      "notes": "Lime is a light action: it needs INK text, never bone (bone on lime is ~1.2:1). Unbounded has no wdth axis; swap to Anybody if the reel uses kinetic width."
+    },
+    {
+      "name": "cargo",
+      "label": "Cargo (amber / cobalt)",
+      "tags": [
+        "logistics",
+        "industrial",
+        "engineering",
+        "mobility",
+        "construction",
+        "reliable",
+        "bold",
+        "b2b"
+      ],
+      "ink": "#0D0E12",
+      "bone": "#F2EEE4",
+      "action": "#FF9F1C",
+      "machine": "#1D4ED8",
+      "fontPairing": {
+        "display": "Archivo",
+        "wdth": [
+          62,
+          125
+        ],
+        "mono": "IBM Plex Mono",
+        "body": "IBM Plex Sans"
+      },
+      "notes": "Safety-amber statements, cobalt data scenes. Amber is light enough that bone text on it fails; always ink."
+    },
+    {
+      "name": "kiln",
+      "label": "Kiln (terracotta / deep teal)",
+      "tags": [
+        "editorial",
+        "publishing",
+        "architecture",
+        "craft",
+        "food",
+        "hospitality",
+        "warm",
+        "heritage"
+      ],
+      "ink": "#14110F",
+      "bone": "#F1EBE0",
+      "action": "#D9623B",
+      "machine": "#0F5E5C",
+      "fontPairing": {
+        "display": "Syne",
+        "wdth": null,
+        "mono": "IBM Plex Mono",
+        "body": "Instrument Sans"
+      },
+      "notes": "Editorial and earthy. Warm paper bone carries most long-form scenes; teal proof scenes read as print ink. Syne has no wdth axis."
+    },
+    {
+      "name": "flamingo",
+      "label": "Flamingo (hot pink / teal)",
+      "tags": [
+        "beauty",
+        "fashion",
+        "social",
+        "creator",
+        "playful",
+        "lifestyle",
+        "youth",
+        "loud"
+      ],
+      "ink": "#0F0B0D",
+      "bone": "#F3ECEE",
+      "action": "#FF3D8B",
+      "machine": "#006B6B",
+      "fontPairing": {
+        "display": "Dela Gothic One",
+        "wdth": null,
+        "mono": "Martian Mono",
+        "body": "Figtree"
+      },
+      "notes": "Hot pink takes ink text. Pink and teal vibrate at similar luminance: never text-on-background between them."
+    },
+    {
+      "name": "bloom",
+      "label": "Bloom (emerald / violet)",
+      "tags": [
+        "sustainability",
+        "climate",
+        "fintech",
+        "growth",
+        "optimistic",
+        "health",
+        "energy",
+        "fresh"
+      ],
+      "ink": "#0B0F0D",
+      "bone": "#EEF0EA",
+      "action": "#19C37D",
+      "machine": "#5B2BD6",
+      "fontPairing": {
+        "display": "Mona Sans",
+        "wdth": [
+          75,
+          125
+        ],
+        "mono": "Geist Mono",
+        "body": "Manrope"
+      },
+      "notes": "Growth green statements with violet proof scenes. Flat fields only: no green-to-violet gradients."
+    },
+    {
+      "name": "arctic",
+      "label": "Arctic (signal red / deep sky)",
+      "tags": [
+        "sports",
+        "outdoor",
+        "automotive",
+        "performance",
+        "athletic",
+        "cold",
+        "clean",
+        "nordic"
+      ],
+      "ink": "#0A0D12",
+      "bone": "#EDF1F3",
+      "action": "#F7372F",
+      "machine": "#115BB8",
+      "fontPairing": {
+        "display": "Roboto Flex",
+        "wdth": [
+          25,
+          151
+        ],
+        "mono": "Azeret Mono",
+        "body": "Instrument Sans"
+      },
+      "notes": "Cool bone and blue-black ink. Red takes ink text, sky blue takes bone text."
+    },
+    {
+      "name": "obsidian",
+      "label": "Obsidian (monochrome + gold)",
+      "tags": [
+        "luxury",
+        "fashion",
+        "jewelry",
+        "premium",
+        "minimal",
+        "elegant",
+        "realestate",
+        "moody"
+      ],
+      "ink": "#0E0D0C",
+      "bone": "#EFEBE4",
+      "action": "#C9A45C",
+      "machine": "#57534E",
+      "fontPairing": {
+        "display": "Lexend Zetta",
+        "wdth": null,
+        "mono": "IBM Plex Mono",
+        "body": "Manrope"
+      },
+      "notes": "Monochrome with a single accent. Machine is a warm mid-grey: use it for quiet proof scenes. Sequence mostly ink/bone; gold action is rare and precious. Lexend Zetta is already ultra-wide and has no wdth axis."
+    },
+    {
+      "name": "solar",
+      "label": "Solar (orange / violet)",
+      "tags": [
+        "energy",
+        "events",
+        "festival",
+        "startup",
+        "launch",
+        "optimistic",
+        "warm",
+        "bold"
+      ],
+      "ink": "#100C0A",
+      "bone": "#F4EEE3",
+      "action": "#FF6A13",
+      "machine": "#4B1FB8",
+      "fontPairing": {
+        "display": "Anybody",
+        "wdth": [
+          50,
+          150
+        ],
+        "mono": "Martian Mono",
+        "body": "Figtree"
+      },
+      "notes": "Maximum warmth against a deep violet. Orange takes ink text; violet takes bone."
+    },
+    {
+      "name": "orchard",
+      "label": "Orchard (tomato / forest)",
+      "tags": [
+        "food",
+        "restaurant",
+        "agriculture",
+        "grocery",
+        "organic",
+        "farm",
+        "bold",
+        "warm"
+      ],
+      "ink": "#0D0F0C",
+      "bone": "#F1EDE3",
+      "action": "#F2442E",
+      "machine": "#1F5B3A",
+      "fontPairing": {
+        "display": "Archivo",
+        "wdth": [
+          62,
+          125
+        ],
+        "mono": "Space Mono",
+        "body": "Hanken Grotesk"
+      },
+      "notes": "Market-stall red and deep forest. Red and green are near-equal in luminance: never text-on-background between them."
+    },
+    {
+      "name": "candy",
+      "label": "Candy (bubblegum / navy)",
+      "tags": [
+        "kids",
+        "education",
+        "consumer",
+        "playful",
+        "friendly",
+        "apps",
+        "candy",
+        "social"
+      ],
+      "ink": "#0E0C14",
+      "bone": "#F6F0F2",
+      "action": "#FF8FC7",
+      "machine": "#1B2A6B",
+      "fontPairing": {
+        "display": "Unbounded",
+        "wdth": null,
+        "mono": "Azeret Mono",
+        "body": "Figtree"
+      },
+      "notes": "Bubblegum is a light action: ink text only, and bone-on-bubblegum is forbidden. Navy is nearly as dark as ink, so alternate navy with bone or action, not with ink."
+    },
+    {
+      "name": "voltage",
+      "label": "Voltage (electric yellow / graphite)",
+      "tags": [
+        "construction",
+        "security",
+        "hardware",
+        "tools",
+        "industrial",
+        "loud",
+        "safety",
+        "utility"
+      ],
+      "ink": "#0B0B0A",
+      "bone": "#EFEDE6",
+      "action": "#FFE11A",
+      "machine": "#3B4150",
+      "fontPairing": {
+        "display": "Archivo",
+        "wdth": [
+          62,
+          125
+        ],
+        "mono": "JetBrains Mono",
+        "body": "IBM Plex Sans"
+      },
+      "notes": "Ink-heavy: most scenes are ink, yellow hits are the punctuation. Yellow is light: ink text only. Graphite machine is close to ink in value, so do not cut ink to machine back to back."
+    },
+    {
+      "name": "apothecary",
+      "label": "Apothecary (maroon / sage)",
+      "tags": [
+        "wellness",
+        "skincare",
+        "spa",
+        "calm",
+        "organic",
+        "therapy",
+        "botanical",
+        "health"
+      ],
+      "ink": "#120E0E",
+      "bone": "#F0ECE4",
+      "action": "#8C2335",
+      "machine": "#7F9A7A",
+      "fontPairing": {
+        "display": "Hubot Sans",
+        "wdth": [
+          75,
+          125
+        ],
+        "mono": "IBM Plex Mono",
+        "body": "Manrope"
+      },
+      "notes": "Inverted polarity: the action field is DARK (bone text) and machine sage is LIGHT (ink text). Slow cuts suit it; keep grain soft."
+    },
+    {
+      "name": "clinic",
+      "label": "Clinic (aqua mint / crimson)",
+      "tags": [
+        "healthtech",
+        "medical",
+        "biotech",
+        "science",
+        "clinical",
+        "research",
+        "trustworthy",
+        "clean"
+      ],
+      "ink": "#0B0F10",
+      "bone": "#EEF2F1",
+      "action": "#00C2A8",
+      "machine": "#9E1B32",
+      "fontPairing": {
+        "display": "Mona Sans",
+        "wdth": [
+          75,
+          125
+        ],
+        "mono": "IBM Plex Mono",
+        "body": "IBM Plex Sans"
+      },
+      "notes": "Clinical aqua takes ink text; crimson proof scenes take bone text. Cool bone keeps it lab-clean."
+    },
+    {
+      "name": "ledger",
+      "label": "Ledger (cobalt / deep teal)",
+      "tags": [
+        "fintech",
+        "banking",
+        "payments",
+        "insurance",
+        "trustworthy",
+        "saas",
+        "b2b",
+        "calm"
+      ],
+      "ink": "#0A0C12",
+      "bone": "#EEF0F2",
+      "action": "#3B78FF",
+      "machine": "#0E5A5A",
+      "fontPairing": {
+        "display": "Hubot Sans",
+        "wdth": [
+          75,
+          125
+        ],
+        "mono": "Geist Mono",
+        "body": "Instrument Sans"
+      },
+      "notes": "Analogous-dark machine for a calm, trustworthy read. Cobalt is bright enough for ink text; deep teal takes bone."
+    }
+  ]
+}

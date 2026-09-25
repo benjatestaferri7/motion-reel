@@ -1,0 +1,8 @@
+node_modules/
+frames/
+out/
+*.mp4
+*.wav
+*.log
+timing.json
+.DS_Store

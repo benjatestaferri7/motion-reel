@@ -1,0 +1,31 @@
+/* =========================================================
+   motion-reel — hard-cut glitch flash (RGB-split slices)
+   ---------------------------------------------------------
+   Rendered by <GlitchCut /> (glitch-cut.tsx). ~160ms of
+   horizontal color slices in difference blend whenever a
+   [data-cut] scene crosses the middle of the viewport.
+   Hidden entirely for reduced motion.
+   ========================================================= */
+
+.cut-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  pointer-events: none;
+  visibility: hidden;
+  mix-blend-mode: difference;
+  overflow: hidden;
+}
+
+.cut-flash > span {
+  position: absolute;
+  left: -10%;
+  width: 120%;
+  display: block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cut-flash {
+    display: none !important;
+  }
+}

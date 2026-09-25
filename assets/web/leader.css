@@ -1,0 +1,139 @@
+/* =========================================================
+   motion-reel — LEADER: 3·2·1 film countdown (CSS-timed ≤1.1s)
+   Pair with leader.tsx. Never blocks input: pointer-events are
+   off except on the skip button. Self-removes via CSS even if
+   JS never hydrates (leader-out at 1.05s).
+   ========================================================= */
+
+@property --sweep {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.leader {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+  background: rgb(var(--reel-bone));
+  color: rgb(var(--reel-on-bone));
+  animation: leader-out 0.01s linear 1.05s forwards;
+}
+.reel-leader-seen .leader {
+  display: none;
+}
+@keyframes leader-out {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+.leader__dial {
+  position: relative;
+  width: min(62vmin, 520px);
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  border: 2px solid currentColor;
+  overflow: hidden;
+}
+.leader__dial::before {
+  content: "";
+  position: absolute;
+  inset: 9%;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, currentColor 60%, transparent);
+}
+.leader__cross {
+  position: absolute;
+  background: color-mix(in srgb, currentColor 50%, transparent);
+}
+.leader__cross--h {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+}
+.leader__cross--v {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+}
+.leader__sweep {
+  position: absolute;
+  inset: 0;
+  background: conic-gradient(color-mix(in srgb, currentColor 16%, transparent) var(--sweep), transparent 0);
+  animation: leader-sweep 0.35s linear 3;
+}
+@keyframes leader-sweep {
+  from { --sweep: 0deg; }
+  to { --sweep: 360deg; }
+}
+.leader__hand {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 50%;
+  margin-left: -1px;
+  background: currentColor;
+  transform-origin: 50% 100%;
+  animation: leader-hand 0.35s linear 3;
+}
+@keyframes leader-hand {
+  to { transform: rotate(360deg); }
+}
+.leader__nums {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  font-size: min(40vmin, 340px);
+}
+.leader__num {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  animation: leader-blink 0.35s steps(1) forwards;
+}
+.leader__num:nth-child(2) { animation-delay: 0.35s; }
+.leader__num:nth-child(3) { animation-delay: 0.7s; }
+@keyframes leader-blink {
+  0%, 99% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.leader__meta {
+  position: absolute;
+  left: clamp(1rem, 3vw, 2.5rem);
+}
+.leader__meta--tl { top: clamp(1rem, 2vw, 1.5rem); }
+.leader__meta--bl { bottom: clamp(1rem, 2vw, 1.5rem); }
+.leader__skip {
+  pointer-events: auto;
+  position: absolute;
+  right: clamp(0.75rem, 2.5vw, 2rem);
+  bottom: clamp(0.75rem, 2vw, 1.25rem);
+  border: 1px solid currentColor;
+  padding: 0.5rem 0.75rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.leader__skip:hover {
+  background: rgb(var(--reel-ink));
+  color: rgb(var(--reel-on-ink));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .leader {
+    display: none !important;
+  }
+}

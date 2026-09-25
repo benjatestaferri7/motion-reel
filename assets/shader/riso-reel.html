@@ -1,0 +1,758 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Riso Shader Reel</title>
+<!--
+  Riso Shader reel: a single self-contained file. Raw WebGL2, no libraries, no images.
+  150 analytic spheres + an infinite glossy plane are ray-traced per pixel, then printed
+  with three inks (paper / ink / spot): halftone screens, plate misregistration, grain.
+
+  Modes
+    LIVE           open the file (or ?live). requestAnimationFrame, adaptive quality,
+                   pauses when the tab is hidden, pointer nudges the camera.
+    DETERMINISTIC  ?render, ?frame=N, or any webdriver (puppeteer). Nothing animates by
+                   itself; call window.renderFrame(n, fps) and read canvas#c.
+                   Compatible with assets/video/reel-template/render.js (--page riso-reel.html).
+
+  URL overrides: w, h, fps, seed, q (low|med|high), scale, spheres, frame, live, render
+-->
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #EDEAE3; }
+  canvas#c { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="Looping print-style animation of spheres printed in three inks"></canvas>
+<script>
+// ============================================================================
+// CONFIG — everything a user should tweak lives here.
+// ============================================================================
+const CONFIG = {
+  // Three inks. Generate with
+  //   node ~/.claude/skills/motion-reel/assets/palette/palette.mjs --preset <name> --format config
+  // and map  bone -> paper,  ink -> ink,  action -> spot  (machine is unused).
+  palette: { paper: '#EDEAE3', ink: '#0B0B0D', spot: '#FF3B1F' },
+
+  width: 1920, height: 1080, fps: 60,       // deterministic render size / rate
+  bpm: 120, durationBeats: 30,              // 30 beats @120 = 15 s seamless loop
+  seed: 7,                                  // sphere layout / rain order
+  sphereCount: 150,                         // hard max 160 (UBO size)
+
+  halftone: {
+    cellPx: 8,                              // dot pitch at 1080p (scaled with canvas height)
+    minCssPx: 4,                            // never smaller than this many CSS px (mobile)
+    angleDeg: { spot: 15, ink: 45, extra: 75 }, // classic non-moire set; extra = 4th plate
+  },
+  misregistrationPx: 3,                     // plate offset at 1080p (ink and spot drift apart)
+  grain: 0.6,                               // 0..1 paper grain + ink mottling
+  vignette: 0.16,                           // 0..1
+  dprCap: 1.5,                              // LIVE: device pixel ratio cap
+
+  quality: {                                // LIVE picks one; adaptive steps down if slow
+    low:  { spheres: 40,  bounces: 1, scale: 0.6, reflShadows: false },
+    med:  { spheres: 90,  bounces: 1, scale: 0.8, reflShadows: false },
+    high: { spheres: 150, bounces: 2, scale: 1.0, reflShadows: true },
+  },
+  startQuality: 'auto',                     // 'auto' | 'low' | 'med' | 'high'
+  adaptive: true,
+  frameBudgetMs: 20,                        // step quality down when frames take longer
+  interactive: true,                        // pointer nudges the camera (LIVE only)
+  stillBeat: 12,                            // reduced-motion hero frame (master beat 0..30)
+};
+window.CONFIG = CONFIG;
+
+// ============================================================================
+// SHADERS
+// ============================================================================
+const VERT = `#version 300 es
+void main() {
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+// Pass 1: ray-trace the scene into a single "tone" channel.
+// tone 0 = ink, 0.5 = spot, 1 = paper. Everything is authored in tone space.
+const SCENE_FRAG = `#version 300 es
+precision highp float;
+precision highp int;
+#define MAXS 160
+layout(std140) uniform Spheres { vec4 uSph[MAXS]; vec4 uMat[MAXS]; };
+uniform int uCount;
+uniform vec2 uRes;
+uniform vec3 uCamPos, uCamFwd, uCamRight, uCamUp;
+uniform float uTanHalf;
+uniform vec3 uLight;
+uniform float uSunSize, uTime, uGloss, uFog, uSwirl, uSwirlRot, uVortex, uTwist, uSpin, uArms, uRings, uRingPhase, uCollapse;
+uniform vec2 uVC;
+uniform vec4 uRip[12];
+uniform int uRipCount, uBounces, uReflShadows;
+out vec4 fragColor;
+
+const float TAU = 6.28318530718;
+
+mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+
+float iSphere(vec3 ro, vec3 rd, vec4 s) {
+  vec3 oc = ro - s.xyz;
+  float b = dot(oc, rd), c = dot(oc, oc) - s.w * s.w, h = b * b - c;
+  if (h < 0.0) return -1.0;
+  return -b - sqrt(h);
+}
+
+// Soft shadow toward a directional light with angular radius uSunSize.
+float shadow(vec3 p, int skip) {
+  float s = 1.0;
+  for (int i = 0; i < MAXS; i++) {
+    if (i >= uCount) break;
+    if (i == skip || uMat[i].w > 0.5) continue;
+    vec4 sp = uSph[i];
+    vec3 oc = sp.xyz - p;
+    float tc = dot(oc, uLight);
+    if (tc <= 0.0) continue;
+    float dl = sqrt(max(dot(oc, oc) - tc * tc, 0.0)) - sp.w;
+    s *= smoothstep(-uSunSize, uSunSize, dl / tc);
+    if (s < 0.01) break;
+  }
+  return s;
+}
+
+// Shadow + analytic sphere occlusion for plane points, one loop.
+void lightPlane(vec3 p, vec3 n, out float sh, out float ao) {
+  sh = 1.0; ao = 1.0;
+  for (int i = 0; i < MAXS; i++) {
+    if (i >= uCount) break;
+    if (uMat[i].w > 0.5) continue;
+    vec4 sp = uSph[i];
+    vec3 oc = sp.xyz - p;
+    float l2 = dot(oc, oc);
+    float k = sp.w * sp.w / l2;
+    ao *= 1.0 - max(dot(n, oc) * inversesqrt(l2), 0.0) * k * sqrt(k);   // tight contact AO
+    float tc = dot(oc, uLight);
+    if (tc > 0.0) {
+      float dl = sqrt(max(l2 - tc * tc, 0.0)) - sp.w;
+      sh *= smoothstep(-uSunSize, uSunSize, dl / tc);
+    }
+  }
+}
+
+float liquid(vec2 p) {
+  vec2 d = p - uVC;
+  vec2 q = rot(uSwirlRot / (1.0 + 0.12 * dot(d, d))) * d * 0.55;
+  float t = uTime;
+  q += 0.7 * vec2(sin(q.y * 1.3 + t * 0.9), sin(q.x * 1.1 - t * 0.8));
+  float h = sin(q.x * 1.9 + t * 1.1) * cos(q.y * 1.6 - t * 0.7);
+  q = mat2(0.8, -0.6, 0.6, 0.8) * q * 2.1;
+  q += 0.5 * vec2(sin(q.y * 1.2 - t * 1.4), sin(q.x * 1.5 + t * 1.2));
+  h += 0.5 * sin(q.x * 1.4 - t * 1.3) * cos(q.y * 1.9 + t * 0.9);
+  return h;
+}
+
+float ripples(vec2 p) {
+  float h = 0.0;
+  for (int i = 0; i < 12; i++) {
+    if (i >= uRipCount) break;
+    vec4 r = uRip[i];                       // xy = centre, z = age (s), w = amplitude
+    float x = length(p - r.xy) - r.z * 2.4;
+    h += r.w * exp(-r.z * 1.2) * exp(-x * x * 2.5) * sin(x * 10.0);
+  }
+  return h;
+}
+
+float heightAt(vec2 p) {
+  float h = 0.0;
+  if (uSwirl > 0.001) h += uSwirl * 0.34 * liquid(p);
+  if (uRipCount > 0) h += 0.035 * ripples(p);
+  return h;
+}
+
+vec3 planeNormal(vec2 p) {
+  if (uSwirl <= 0.001 && uRipCount == 0) return vec3(0.0, 1.0, 0.0);
+  const float e = 0.02;
+  float h = heightAt(p);
+  return normalize(vec3(-(heightAt(p + vec2(e, 0.0)) - h) / e, 1.0, -(heightAt(p + vec2(0.0, e)) - h) / e));
+}
+
+// Alternating ink / paper band with a hard leading edge and a screened tail.
+float band(float u) {
+  float k = floor(u), f = u - k;
+  float ink = mod(k, 2.0) < 0.5 ? 0.0 : 1.0;
+  return mix(ink, 0.5, smoothstep(0.0, 0.42, f));
+}
+// Spiral arms around uVC, cross-fading into concentric rings that collapse inward.
+float vortexTone(vec2 p, float base) {
+  if (uVortex <= 0.001) return base;
+  vec2 d = p - uVC;
+  float r = max(length(d), 1e-3);
+  float spiral = band(atan(d.y, d.x) / TAU * uArms + uTwist * log(r) / TAU - uSpin);
+  float rings = band(3.0 * log(r) + uRingPhase);
+  float t = mix(spiral, rings, uRings);
+  float reach = 0.6 * pow(28.0, 1.0 - uCollapse);              // bands vanish outside-in
+  float amp = uVortex * smoothstep(0.15, 0.9, r) * (1.0 - smoothstep(reach - 1.5, reach, r));
+  return mix(base, t, amp);
+}
+
+float shadePlane(vec3 p, vec3 n, bool doShadow) {
+  float t = vortexTone(p.xz, 0.5);
+  float sh = 1.0, ao = 1.0;
+  if (doShadow) lightPlane(p + n * 1e-3, n, sh, ao);
+  float diff = clamp(dot(n, uLight) / uLight.y, 0.0, 1.5);
+  return t * mix(0.04, 1.0, sh * ao) * mix(1.0, diff * diff, 0.9);
+}
+
+float shadeSphere(int i, vec3 p, vec3 n, vec3 rd, bool doShadow, out float spec) {
+  vec4 m = uMat[i];
+  float sh = doShadow ? shadow(p + n * 1e-3, i) : 1.0;
+  float diff = max(dot(n, uLight), 0.0) * sh;
+  float t = m.x;
+  if (m.x > 0.1 && m.x < 0.9) t = m.x * (0.25 + 0.85 * diff);   // spot-ink sphere: shaded
+  spec = m.y * pow(max(dot(reflect(rd, n), uLight), 0.0), 70.0) * sh * 1.8;
+  return t;
+}
+
+// id: -2 sky, -1 plane, >= 0 sphere
+float trace(vec3 ro, vec3 rd, out int id) {
+  float tm = 1e5; id = -2;
+  if (rd.y < -1e-4) { float tp = -ro.y / rd.y; if (tp > 0.0) { tm = tp; id = -1; } }
+  for (int i = 0; i < MAXS; i++) {
+    if (i >= uCount) break;
+    float t = iSphere(ro, rd, uSph[i]);
+    if (t > 1e-3 && t < tm) { tm = t; id = i; }
+  }
+  return tm;
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * uRes.y);
+  vec3 ro = uCamPos;
+  vec3 rd = normalize(uCamFwd + uTanHalf * (uv.x * uCamRight + uv.y * uCamUp));
+  float acc = 0.0, w = 1.0, firstT = 1e5;
+  int firstId = -2;
+  for (int b = 0; b < 3; b++) {
+    if (b > uBounces) break;
+    bool doSh = b == 0 || uReflShadows == 1;
+    int id;
+    float t = trace(ro, rd, id);
+    if (b == 0) { firstT = t; firstId = id; }
+    if (id == -2) { acc += w; break; }                      // sky = bare paper
+    vec3 p = ro + rd * t;
+    vec3 n;
+    float local, spec = 0.0, refl;
+    if (id == -1) {
+      n = planeNormal(p.xz);
+      local = shadePlane(p, n, doSh);
+      refl = uGloss * (0.06 + 0.94 * pow(1.0 - max(dot(n, -rd), 0.0), 5.0));
+    } else {
+      vec4 s = uSph[id];
+      n = (p - s.xyz) / s.w;
+      local = shadeSphere(id, p, n, rd, doSh, spec);
+      refl = uMat[id].z * (0.04 + 0.96 * pow(1.0 - max(dot(n, -rd), 0.0), 5.0));
+    }
+    if (b == uBounces) refl = 0.0;
+    acc += w * ((1.0 - refl) * local + spec);
+    w *= refl;
+    if (w < 0.01) break;
+    ro = p + n * 2e-3;
+    rd = reflect(rd, n);
+    if (id == -1) rd.y = abs(rd.y);
+  }
+  // haze toward the horizon: only the plane fades to paper, spheres stay inked
+  float fog = firstId == -1 ? 1.0 - exp(-pow(firstT * uFog, 2.0)) : 0.0;
+  fragColor = vec4(clamp(mix(acc, 1.0, fog), 0.0, 1.0), 0.0, 0.0, 1.0);
+}`;
+
+// Pass 2: print. Tone -> two separations (ink, spot) -> rotated AM dot screens,
+// per-plate misregistration, grain, vignette, composited subtractively on paper.
+const POST_FRAG = `#version 300 es
+precision highp float;
+uniform sampler2D uScene;
+uniform vec2 uRes;
+uniform vec3 uPaper, uInk, uSpot;
+uniform float uCell, uAngInk, uAngSpot, uGrain, uVig, uSeed;
+uniform vec2 uMisInk, uMisSpot;
+out vec4 fragColor;
+
+const float TAU = 6.28318530718;
+
+float hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+}
+float tone(vec2 px) { return texture(uScene, px / uRes).r; }
+
+// Euclidean dot: round dots -> checkerboard at 50% -> inverted dots.
+float screen(vec2 px, float ang, float cov) {
+  vec2 q = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * px / uCell;
+  float th = 0.5 - 0.25 * (cos(TAU * q.x) + cos(TAU * q.y));
+  float d = cov * 1.04 - 0.02 - th;
+  float w = max(fwidth(d) * 0.7, 1e-3);
+  // solids stay solid and bare paper stays bare (AA must not open holes at the extremes)
+  return clamp(smoothstep(-w, w, d), smoothstep(0.88, 0.98, cov), smoothstep(0.02, 0.12, cov));
+}
+
+void main() {
+  vec2 px = gl_FragCoord.xy;
+  float g = uGrain;
+  float covK = clamp(1.0 - 2.0 * tone(px + uMisInk), 0.0, 1.0);
+  float covS = clamp(2.0 - 2.0 * tone(px + uMisSpot), 0.0, 1.0);
+  // dead zones keep flat fields solid (8-bit tone + grain must not leak stray dots)
+  covK = clamp((covK - 0.10) / 0.80, 0.0, 1.0);
+  covS = clamp((covS - 0.06) / 0.84, 0.0, 1.0);
+  // grain only roughens the screened mid-tones
+  covK = clamp(covK + (hash(px + uSeed * 17.13) - 0.5) * g * 0.8 * covK * (1.0 - covK), 0.0, 1.0);
+  covS = clamp(covS + (hash(px * 1.37 + uSeed * 9.71 + 3.1) - 0.5) * g * 0.8 * covS * (1.0 - covS), 0.0, 1.0);
+  float dk = screen(px, uAngInk, covK);
+  float ds = screen(px, uAngSpot, covS);
+  // uneven drum: ink density mottles slightly, per plate
+  float mottleS = 1.0 - g * 0.16 * vnoise(px * 0.06 + uSeed * 1.7);
+  float mottleK = 1.0 - g * 0.04 * vnoise(px * 0.05 - uSeed * 2.3 + 11.0);
+  vec3 paper = uPaper * (1.0 - g * 0.05 * vnoise(px * 0.012 + 5.0));   // static fibre
+  vec3 col = paper;
+  col *= mix(vec3(1.0), uSpot / max(uPaper, vec3(1e-3)), ds * mottleS);
+  col *= mix(vec3(1.0), uInk / max(uPaper, vec3(1e-3)), dk * mottleK);
+  col *= 1.0 - g * 0.12 * hash(px * 0.71 + uSeed * 3.7);                  // grain
+  vec2 v = px / uRes - 0.5; v.x *= uRes.x / uRes.y;
+  col *= 1.0 - uVig * smoothstep(0.35, 1.1, length(v));
+  fragColor = vec4(col, 1.0);
+}`;
+
+// ============================================================================
+// CHOREOGRAPHY — pure functions of time. Authored on a 30-beat master grid.
+// ============================================================================
+const TAU = Math.PI * 2;
+const MAXS = 160;
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const prog = (x, a, b) => clamp((x - a) / (b - a));
+const ease = {
+  inOut: x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2),
+  out: x => 1 - Math.pow(1 - x, 3),
+  in: x => x * x * x,
+  expoOut: x => (x >= 1 ? 1 : 1 - Math.pow(2, -10 * x)),
+};
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Acts on the master grid (scaled if durationBeats != 30).
+const ACTS = [
+  { type: 'origin',   b0: 0,  b1: 4 },   // one black sphere on the spot field, paper "sun" passes
+  { type: 'mitosis',  b0: 4,  b1: 9 },   // spheres split on every beat, lift, cast soft shadows
+  { type: 'rain',     b0: 9,  b1: 15 },  // camera drops low; spheres rain onto a glossy plane
+  { type: 'liquid',   b0: 15, b1: 19 },  // surface turns to liquid swirls, spheres sink
+  { type: 'vortex',   b0: 19, b1: 25 },  // top-down whirlpool of ink / paper bands
+  { type: 'collapse', b0: 25, b1: 30 },  // bands tighten into rings, collapse to ONE sphere
+];
+
+function createChoreography(seed) {
+  const R0 = 0.9, H0 = [-2.0, 0.1], VC = [0, 4], G = 18;
+  const lightAt = B => {
+    const k = ease.inOut(prog(B, 0.5, 4)) * (1 - ease.inOut(prog(B, 27, 29.2)));
+    const v = [lerp(-0.1, -0.55, k), 1.0, lerp(0.08, 0.5, k)], l = Math.hypot(...v);
+    return v.map(x => x / l);
+  };
+  const rnd = mulberry32(seed);
+  const S = [];
+  for (let i = 0; i < MAXS; i++) {
+    S.push({ a: rnd() * TAU, dy: rnd() - 0.5, bob: rnd() * TAU, rt: rnd(), rx: rnd(), rz: rnd(), ry: rnd(), rr: rnd(), sink: rnd(), kind: rnd(), oa: rnd() * TAU, orr: rnd(), os: rnd() });
+  }
+  S[0].sink = 0.15;
+
+  const CAM = [
+    { b: 0,    p: [0, 10, 0],      pitch: -90, yaw: 0,   fov: 30 },
+    { b: 1,    p: [0, 10, 0],      pitch: -90, yaw: 0,   fov: 30 },
+    { b: 4,    p: [0.2, 11, 0.2],  pitch: -90, yaw: 0,   fov: 30 },
+    { b: 9.2,  p: [1.0, 16, 1.0],  pitch: -90, yaw: 0,   fov: 30 },
+    { b: 10.8, p: [0, 1.3, -9],    pitch: -5,  yaw: 0,   fov: 55, e: 'lin' },
+    { b: 15,   p: [0, 1.05, -6.5], pitch: -7,  yaw: 5,   fov: 55, e: 'lin' },
+    { b: 18.6, p: [0.4, 0.9, -4],  pitch: -11, yaw: -4,  fov: 58 },
+    { b: 21,   p: [0, 9, 4],       pitch: -90, yaw: -50, fov: 42, e: 'lin' },
+    { b: 25,   p: [0, 7.5, 4],     pitch: -90, yaw: -15, fov: 42 },
+    { b: 27.2, p: [0, 7.2, 4],     pitch: -90, yaw: -8,  fov: 40 },
+    { b: 29.2, p: [0, 10, 0],      pitch: -90, yaw: 0,   fov: 30 },
+    { b: 30,   p: [0, 10, 0],      pitch: -90, yaw: 0,   fov: 30 },
+  ];
+
+  const gen = i => 31 - Math.clz32(i);
+  const clusterR = i => (i === 0 ? R0 : R0 * Math.pow(0.88, gen(i) + 1));
+  function heroPath(B) {
+    const a = ease.inOut(prog(B, 1, 4)), b = ease.inOut(prog(B, 4, 9.4));
+    const x = lerp(lerp(H0[0], 0.2, a), 1.1, b), z = lerp(lerp(H0[1], 0.3, a), 1.0, b);
+    const y = R0 + 0.9 * a + 1.4 * b + 0.12 * prog(B, 1, 2) * Math.sin(B * Math.PI * 0.5);
+    return [x, y, z];
+  }
+  function clusterPos(i, B) {
+    if (i === 0) return heroPath(B);
+    const g = gen(i), p = clusterPos(i - (1 << g), B), s = S[i];
+    const e = ease.expoOut(prog(B, 4 + g, 4.9 + g));
+    const d = R0 * 2.0 * Math.pow(0.78, g) * e;
+    return [p[0] + Math.cos(s.a) * d, p[1] + s.dy * 0.6 * d + 0.1 * e * Math.sin(B * Math.PI * 0.5 + s.bob), p[2] + Math.sin(s.a) * d];
+  }
+  // Rain params are time-independent: precompute once.
+  const RAIN = S.map((s, i) => {
+    if (i < 32) {
+      const t0 = 9.4 + (i / 32) * 1.4;
+      return { t0, start: clusterPos(i, t0), r: clusterR(i) };
+    }
+    const z = lerp(-3.5, 18, Math.pow(s.rz, 1.3)), d = z + 9;
+    return { t0: 9.8 + s.rt * 4.4, start: [(s.rx - 0.5) * 2 * d * 0.8, 3.3 + d * 0.45 + s.ry * 5, z], r: 0.16 + 0.5 * s.rr * s.rr };
+  });
+  function bounceY(y0, r, tau) {
+    const h = y0 - r;
+    if (h <= 0) return y0;
+    const t1 = Math.sqrt((2 * h) / G);
+    if (tau < t1) return y0 - 0.5 * G * tau * tau;
+    let v = G * t1 * 0.38, tt = tau - t1;
+    for (let k = 0; k < 3; k++) {
+      const d = (2 * v) / G;
+      if (tt < d) return r + v * tt - 0.5 * G * tt * tt;
+      tt -= d; v *= 0.38;
+    }
+    return r;
+  }
+  RAIN.forEach(rp => { rp.landSec = Math.sqrt((2 * Math.max(rp.start[1] - rp.r, 0)) / G); });
+
+  const U = (B) => ({
+    gloss: lerp(lerp(0.85 * ease.inOut(prog(B, 9.4, 10.8)), 0.3, ease.inOut(prog(B, 18.6, 21))), 0, ease.inOut(prog(B, 25, 28.4))),
+    fog: 0.05 * ease.inOut(prog(B, 9.4, 10.8)) * (1 - ease.inOut(prog(B, 18.6, 20.5))),
+    swirl: ease.inOut(prog(B, 14.8, 17.5)) * (1 - 0.65 * ease.inOut(prog(B, 20, 23))) * (1 - ease.inOut(prog(B, 24.5, 27))),
+    swirlRot: 0.55 * Math.max(0, B - 14.8),
+    vortex: ease.inOut(prog(B, 19.3, 21.5)) * (1 - ease.inOut(prog(B, 27.3, 27.8))),
+    twist: 3.2,
+    spin: -0.35 * (B - 19),
+    rings: ease.inOut(prog(B, 24.4, 25.4)),
+    ringPhase: 0.9 * (B - 24) + 3 * ease.in(prog(B, 25.4, 27.6)),
+    collapse: prog(B, 25.4, 27.6),
+    arms: 6,
+    sunSize: lerp(0.12, 0.2, prog(B, 3, 6)) - 0.06 * prog(B, 9.4, 10.8),
+  });
+
+  function camera(B) {
+    let k = 0;
+    while (k < CAM.length - 2 && B >= CAM[k + 1].b) k++;
+    const a = CAM[k], b = CAM[k + 1];
+    const u = prog(B, a.b, b.b), e = b.e === 'lin' && a.e === 'lin' ? u : ease.inOut(u);
+    return { p: a.p.map((v, j) => lerp(v, b.p[j], e)), pitch: lerp(a.pitch, b.pitch, e), yaw: lerp(a.yaw, b.yaw, e), fov: lerp(a.fov, b.fov, e) };
+  }
+
+  // Fills `buf` (Float32Array(MAXS*8): MAXS vec4 pos/radius, then MAXS vec4 material).
+  function frame(B, sec, count, buf, rip) {
+    let n = 0;
+    const push = (x, y, z, r, tone, spec, refl, nocast) => {
+      if (r < 0.005 || n >= MAXS || y < -r - 0.05) return;
+      const o = n * 4, m = MAXS * 4 + n * 4;
+      buf[o] = x; buf[o + 1] = y; buf[o + 2] = z; buf[o + 3] = r;
+      buf[m] = tone; buf[m + 1] = spec; buf[m + 2] = refl; buf[m + 3] = nocast ? 1 : 0;
+      n++;
+    };
+    const u = U(B);
+    // paper "sun" sphere, act 1-2
+    if (B > 0.4 && B < 6.2) { const k = prog(B, 0.4, 6.2); push(lerp(6.5, -6.5, k), 4.2, lerp(2.4, 1.6, k), 0.4, 0.97, 0, 0, true); }
+    const flow = (x, z) => {
+      const dx = x - VC[0], dz = z - VC[1], a = u.swirlRot / (1 + (dx * dx + dz * dz) / 9), c = Math.cos(a), s = Math.sin(a);
+      return [VC[0] + dx * c - dz * s, VC[1] + dx * s + dz * c];
+    };
+    for (let i = 0; i < count; i++) {
+      const s = S[i], rp = RAIN[i];
+      const black = i < 32 || s.kind > 0.12;
+      const tone = black ? 0.02 : 0.5, spec = black ? 1 : 0.8, refl = black ? 0.4 : 0.3;
+      if (B >= 19.5 && i <= 16) {
+        if (i === 0) {                                            // hero: rises in the vortex, returns home
+          const rise = ease.out(prog(B, 19.5, 21.2)), back = ease.inOut(prog(B, 27.2, 29.2));
+          const r = lerp(1.25, R0, back);
+          push(lerp(VC[0], H0[0], back), lerp(lerp(-1.4, 0.25, rise), R0, back), lerp(VC[1], H0[1], back), r, 0.02, 1 - prog(B, 27.6, 29.2), 0.4);
+        } else {                                                  // orbiters sucked into the vortex
+          const ap = ease.out(prog(B, 20 + s.os * 0.8, 21.2 + s.os * 0.8)), suck = ease.in(prog(B, 21.5, 25));
+          const R = lerp(2 + 3.2 * s.orr, 0.6, suck), ang = s.oa + (TAU * u.spin) / u.arms;
+          const r = (0.22 + 0.25 * s.os) * ap * (1 - suck);
+          push(VC[0] + Math.cos(ang) * R, lerp(-r - 0.2, r * 0.6, ap), VC[1] + Math.sin(ang) * R, r, tone, spec, refl);
+        }
+        continue;
+      }
+      if (B < rp.t0) {                                            // acts 1-2: mitosis cluster
+        if (i < 32 && (i === 0 || B >= 4 + gen(i))) { const p = clusterPos(i, B); push(p[0], p[1], p[2], clusterR(i), tone, i === 0 ? prog(B, 0.8, 2) : spec, refl); }
+        continue;
+      }
+      let y = bounceY(rp.start[1], rp.r, (B - rp.t0) * sec);    // acts 3-4: rain, bounce, sink
+      const sb = 15 + s.sink * 3.0;
+      y -= (rp.r * 2 + 0.15) * ease.in(prog(B, sb, sb + 1.6));
+      const [x, z] = flow(rp.start[0], rp.start[2]);
+      push(x, y, z, rp.r, tone, spec, refl);
+      // ripple from the first impact
+      const age = (B - rp.t0) * sec - rp.landSec;
+      if (age >= 0 && age < 2.5 && B < 19) rip.push([rp.start[0], rp.start[2], age, rp.r * 1.2]);
+    }
+    rip.sort((a, b) => a[2] - b[2]);
+    if (rip.length > 12) rip.length = 12;
+    return { count: n, u, cam: camera(B), light: lightAt(B), vc: VC };
+  }
+  return { frame, acts: ACTS };
+}
+
+// ============================================================================
+// RUNTIME
+// ============================================================================
+(() => {
+  'use strict';
+  const Q = new URLSearchParams(location.search);
+  const qn = (k, d) => (Q.has(k) ? Number(Q.get(k)) : d);
+  const DETERMINISTIC = !Q.has('live') && (Q.has('render') || Q.has('frame') || navigator.webdriver === true);
+  const REDUCED = !DETERMINISTIC && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const FPS = qn('fps', CONFIG.fps);
+  const SPB = 60 / CONFIG.bpm;
+  const BEATS = CONFIG.durationBeats;
+  const DURATION = BEATS * SPB;
+  const MB = 30 / BEATS;                        // real beat -> master beat
+  const SEC_PER_MB = SPB / MB;
+  const canvas = document.getElementById('c');
+  const hex = h => { const v = parseInt(h.replace('#', ''), 16); return [(v >> 16 & 255) / 255, (v >> 8 & 255) / 255, (v & 255) / 255]; };
+  document.documentElement.style.background = document.body.style.background = CONFIG.palette.paper;
+
+  const W0 = qn('w', CONFIG.width), H0 = qn('h', CONFIG.height);
+  const TOTAL = Math.round(DURATION * FPS);
+  const scaleBeats = b => +(b / MB).toFixed(3);
+  window.REEL = {
+    width: W0, height: H0, fps: FPS, bpm: CONFIG.bpm, totalBeats: BEATS, totalFrames: TOTAL, duration: TOTAL / FPS,
+    cuts: ACTS.map(a => scaleBeats(a.b0)), big: [scaleBeats(9), scaleBeats(19)], finalBeat: BEATS - 1, silence: 0,
+    scenes: ACTS.map(a => ({ type: a.type, b0: scaleBeats(a.b0), b1: scaleBeats(a.b1) })),
+  };
+
+  const choreo = createChoreography(qn('seed', CONFIG.seed));
+  const BUF = new Float32Array(MAXS * 8);
+  const RIP = new Float32Array(12 * 4);
+
+  // quality
+  const coarse = matchMedia('(pointer: coarse)').matches || Math.min(screen.width, screen.height) < 600;
+  const LEVELS = ['low', 'med', 'high'];
+  let level = LEVELS.indexOf(Q.get('q') || (DETERMINISTIC ? 'high' : CONFIG.startQuality === 'auto' ? (coarse ? 'low' : 'high') : CONFIG.startQuality));
+  if (level < 0) level = 2;
+  const qual = () => {
+    const q = CONFIG.quality[LEVELS[level]];
+    return { spheres: Math.min(MAXS, qn('spheres', Math.min(CONFIG.sphereCount, q.spheres))), bounces: q.bounces, scale: qn('scale', q.scale), reflShadows: q.reflShadows };
+  };
+
+  // --------------------------------------------------------------- fallback
+  function poster() {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = canvas.width = canvas.clientWidth || W0, h = canvas.height = canvas.clientHeight || H0;
+    const P = CONFIG.palette, cell = Math.max(6, h / 90);
+    ctx.fillStyle = P.spot; ctx.fillRect(0, 0, w, h);
+    const cx = w * 0.42, cy = h * 0.5, R = h * 0.2;
+    ctx.fillStyle = P.ink;                                   // screened soft shadow
+    for (let y = 0; y < h; y += cell) for (let x = 0; x < w; x += cell) {
+      const d = Math.hypot(x - cx - R * 0.6, (y - cy - R * 0.5) * 1.3) / (R * 1.5);
+      const cov = clamp(1 - d) ** 1.5;
+      if (cov > 0.02) { ctx.beginPath(); ctx.arc(x, y, cell * 0.55 * Math.sqrt(cov), 0, TAU); ctx.fill(); }
+    }
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.fill();
+    ctx.fillStyle = P.paper; ctx.beginPath(); ctx.arc(w * 0.72, h * 0.22, R * 0.4, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx - R * 0.35, cy + R * 0.4, R * 0.08, 0, TAU); ctx.fill();
+  }
+
+  // --------------------------------------------------------------- GL setup
+  let gl = null, P1, P2, ubo, fbo, tex, texW = 0, texH = 0, vao;
+  function compile(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error('shader: ' + gl.getShaderInfoLog(s));
+    return s;
+  }
+  function program(fs) {
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, VERT));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('link: ' + gl.getProgramInfoLog(p));
+    const loc = {};
+    const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i = 0; i < n; i++) { const u = gl.getActiveUniform(p, i); const name = u.name.replace(/\[0\]$/, ''); loc[name] = gl.getUniformLocation(p, u.name); }
+    return { p, loc };
+  }
+  function initGL() {
+    gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
+    if (!gl) return false;
+    P1 = program(SCENE_FRAG);
+    P2 = program(POST_FRAG);
+    const bi = gl.getUniformBlockIndex(P1.p, 'Spheres');
+    gl.uniformBlockBinding(P1.p, bi, 0);
+    ubo = gl.createBuffer();
+    gl.bindBuffer(gl.UNIFORM_BUFFER, ubo);
+    gl.bufferData(gl.UNIFORM_BUFFER, BUF.byteLength, gl.DYNAMIC_DRAW);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, ubo);
+    vao = gl.createVertexArray();
+    fbo = gl.createFramebuffer();
+    tex = null; texW = texH = 0;
+    return true;
+  }
+  function ensureTarget(w, h) {
+    if (tex && w === texW && h === texH) return;
+    if (tex) gl.deleteTexture(tex);
+    tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, w, h, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    texW = w; texH = h;
+  }
+
+  // --------------------------------------------------------------- sizing
+  let cssScale = 1;                               // device px per CSS px
+  function resize() {
+    if (DETERMINISTIC) { canvas.width = W0; canvas.height = H0; cssScale = 1; return; }
+    const dpr = Math.min(window.devicePixelRatio || 1, CONFIG.dprCap);
+    const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    cssScale = dpr;
+  }
+
+  // --------------------------------------------------------------- draw
+  const pointer = { x: 0, y: 0, sx: 0, sy: 0 };
+  function draw(t, frameNo) {
+    const q = qual();
+    const B = (((t / SPB) * MB) % 30 + 30) % 30;
+    const rip = [];
+    const st = choreo.frame(B, SEC_PER_MB, q.spheres, BUF, rip);
+    const W = canvas.width, H = canvas.height;
+    const sw = Math.max(2, Math.round(W * q.scale)), sh = Math.max(2, Math.round(H * q.scale));
+    ensureTarget(sw, sh);
+
+    // camera (+ optional pointer nudge)
+    const c = st.cam;
+    let pitch = c.pitch, yaw = c.yaw;
+    const cp = c.p.slice();
+    if (!DETERMINISTIC && CONFIG.interactive) {
+      pointer.sx += (pointer.x - pointer.sx) * 0.06; pointer.sy += (pointer.y - pointer.sy) * 0.06;
+      yaw += pointer.sx * 4; pitch = clamp(pitch - pointer.sy * 3, -90, 10);
+      cp[0] += pointer.sx * 0.35; cp[2] -= pointer.sy * 0.35;
+    }
+    const pr = pitch * Math.PI / 180, yr = yaw * Math.PI / 180;
+    const fwd = [Math.cos(pr) * Math.sin(yr), Math.sin(pr), Math.cos(pr) * Math.cos(yr)];
+    const right = [Math.cos(yr), 0, -Math.sin(yr)];
+    const up = [fwd[1] * right[2] - fwd[2] * right[1], fwd[2] * right[0] - fwd[0] * right[2], fwd[0] * right[1] - fwd[1] * right[0]];
+
+    // pass 1: scene -> tone texture
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, sw, sh);
+    gl.useProgram(P1.p);
+    gl.bindBuffer(gl.UNIFORM_BUFFER, ubo);
+    gl.bufferSubData(gl.UNIFORM_BUFFER, 0, BUF);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, ubo);
+    const L = P1.loc, u = st.u;
+    gl.uniform1i(L.uCount, st.count);
+    gl.uniform2f(L.uRes, sw, sh);
+    gl.uniform3fv(L.uCamPos, cp); gl.uniform3fv(L.uCamFwd, fwd); gl.uniform3fv(L.uCamRight, right); gl.uniform3fv(L.uCamUp, up);
+    gl.uniform1f(L.uTanHalf, Math.tan(c.fov * Math.PI / 360));
+    gl.uniform3fv(L.uLight, st.light);
+    gl.uniform1f(L.uSunSize, u.sunSize);
+    gl.uniform1f(L.uTime, t);
+    gl.uniform1f(L.uGloss, u.gloss); gl.uniform1f(L.uFog, u.fog);
+    gl.uniform1f(L.uSwirl, u.swirl); gl.uniform1f(L.uSwirlRot, u.swirlRot);
+    gl.uniform1f(L.uVortex, u.vortex); gl.uniform1f(L.uTwist, u.twist); gl.uniform1f(L.uSpin, u.spin); gl.uniform1f(L.uArms, u.arms);
+    gl.uniform1f(L.uRings, u.rings); gl.uniform1f(L.uRingPhase, u.ringPhase); gl.uniform1f(L.uCollapse, u.collapse);
+    gl.uniform2fv(L.uVC, st.vc);
+    RIP.fill(0); rip.forEach((r, i) => RIP.set(r, i * 4));
+    if (L.uRip) gl.uniform4fv(L.uRip, RIP);
+    gl.uniform1i(L.uRipCount, rip.length);
+    gl.uniform1i(L.uBounces, q.bounces);
+    gl.uniform1i(L.uReflShadows, q.reflShadows ? 1 : 0);
+    gl.bindVertexArray(vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // pass 2: print
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(P2.p);
+    const M = P2.loc, unit = H / 1080;
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(M.uScene, 0);
+    gl.uniform2f(M.uRes, W, H);
+    const pal = CONFIG.palette;
+    gl.uniform3fv(M.uPaper, hex(pal.paper)); gl.uniform3fv(M.uInk, hex(pal.ink)); gl.uniform3fv(M.uSpot, hex(pal.spot));
+    const ht = CONFIG.halftone;
+    gl.uniform1f(M.uCell, Math.max(ht.cellPx * unit, ht.minCssPx * cssScale, 3));
+    gl.uniform1f(M.uAngInk, ht.angleDeg.ink * Math.PI / 180);
+    gl.uniform1f(M.uAngSpot, ht.angleDeg.spot * Math.PI / 180);
+    const mis = CONFIG.misregistrationPx * Math.max(unit, cssScale * 0.5);
+    gl.uniform2f(M.uMisInk, mis * 0.8, -mis * 0.45);
+    gl.uniform2f(M.uMisSpot, -mis * 0.55, mis * 0.6);
+    gl.uniform1f(M.uGrain, CONFIG.grain);
+    gl.uniform1f(M.uVig, CONFIG.vignette);
+    gl.uniform1f(M.uSeed, (frameNo % 1024) + 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // --------------------------------------------------------------- live loop
+  let raf = 0, clock = 0, last = 0, ema = 16, slow = 0, warm = 0, liveOn = false;
+  function tick(now) {
+    raf = requestAnimationFrame(tick);
+    const dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
+    last = now;
+    clock = (clock + dt) % DURATION;
+    if (CONFIG.adaptive && dt > 0 && ++warm > 30) {
+      ema = ema * 0.9 + dt * 1000 * 0.1;
+      slow = ema > CONFIG.frameBudgetMs ? slow + 1 : Math.max(0, slow - 1);
+      if (slow > 45 && level > 0) { level--; slow = 0; warm = 0; ema = 16; console.info('[riso] quality ->', LEVELS[level]); }
+    }
+    draw(clock, Math.floor(clock * FPS));
+  }
+  const play = () => { if (liveOn && !raf && !document.hidden) { last = 0; raf = requestAnimationFrame(tick); } };
+  const pause = () => { if (raf) cancelAnimationFrame(raf); raf = 0; };
+  function still() { resize(); draw((CONFIG.stillBeat / MB) * SPB, 0); }
+
+  // --------------------------------------------------------------- boot
+  window.renderFrame = (n, fps = FPS) => {
+    liveOn = false; pause();
+    if (!gl) { poster(); return false; }
+    resize();
+    draw(((n / fps) % DURATION + DURATION) % DURATION, n);
+    gl.finish();
+    return true;
+  };
+  window.RISO = { get quality() { return LEVELS[level]; }, setQuality(name) { const i = LEVELS.indexOf(name); if (i >= 0) level = i; }, play() { liveOn = true; play(); }, pause };
+
+  let ok = false;
+  try { ok = initGL(); } catch (e) { console.error('[riso] ' + e.message); ok = false; gl = null; }
+  if (!ok) {
+    console.warn('[riso] WebGL2 unavailable, static poster fallback');
+    gl = null; poster();
+  } else {
+    resize();
+    canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); pause(); });
+    canvas.addEventListener('webglcontextrestored', () => { initGL(); if (liveOn) play(); else if (!DETERMINISTIC) still(); });
+    if (DETERMINISTIC) {
+      renderFrame(qn('frame', 0));
+    } else if (REDUCED) {
+      still();
+      addEventListener('resize', still);
+    } else {
+      liveOn = true;
+      addEventListener('resize', resize);
+      document.addEventListener('visibilitychange', () => (document.hidden ? pause() : play()));
+      if (CONFIG.interactive) addEventListener('pointermove', e => { pointer.x = (e.clientX / innerWidth) * 2 - 1; pointer.y = (e.clientY / innerHeight) * 2 - 1; }, { passive: true });
+      play();
+    }
+  }
+  console.log(`[reel] ready ${canvas.width}x${canvas.height}@${FPS} frames=${TOTAL} beats=${BEATS} webgl2=${!!gl} mode=${DETERMINISTIC ? 'deterministic' : REDUCED ? 'still' : 'live'} q=${LEVELS[level]}`);
+  window.READY = true;
+  window.__ready = true;
+})();
+</script>
+</body>
+</html>

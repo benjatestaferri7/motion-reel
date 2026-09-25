@@ -1,0 +1,49 @@
+/* =========================================================
+   motion-reel — film layers: grain + vignette
+   ---------------------------------------------------------
+   Usage (once, at the end of <body>):
+     <div class="reel-vignette" aria-hidden="true"></div>
+     <div class="reel-grain" aria-hidden="true"></div>
+
+   Perf: grain is a single SVG-noise tile translated with
+   steps() on the compositor (transform only, no repaint).
+   It is oversized (inset: -100%) so translations never reveal
+   an edge. Both layers are pointer-events: none.
+   Keep z-index BELOW the navbar and cut flash, ABOVE content.
+   ========================================================= */
+
+.reel-grain {
+  position: fixed;
+  inset: -100%;
+  z-index: 55;
+  pointer-events: none;
+  opacity: 0.07;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 1.6 -0.3'/></filter><rect width='220' height='220' filter='url(%23n)'/></svg>");
+  background-size: 220px 220px;
+  animation: reel-grain-shift 0.9s steps(6) infinite;
+  will-change: transform;
+}
+
+@keyframes reel-grain-shift {
+  0% { transform: translate3d(0, 0, 0); }
+  20% { transform: translate3d(-7%, 4%, 0); }
+  40% { transform: translate3d(5%, -9%, 0); }
+  60% { transform: translate3d(-11%, 2%, 0); }
+  80% { transform: translate3d(8%, 11%, 0); }
+  100% { transform: translate3d(-3%, -5%, 0); }
+}
+
+.reel-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 54;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 58%, rgb(var(--reel-ink) / 0.28) 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Static grain is fine; moving grain is not. */
+  .reel-grain {
+    animation: none;
+  }
+}

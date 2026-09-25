@@ -1,0 +1,1007 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Motion Reel Template</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}body.play{display:grid;place-items:center;height:100vh}body.play canvas{max-width:100vw;max-height:100vh}</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+// ============================================================================
+// MOTION REEL TEMPLATE — deterministic canvas reel.
+//
+// renderFrame(n) is a PURE function of the frame number n: no Date.now(),
+// no Math.random(), no requestAnimationFrame, no state carried between frames.
+// All timing derives from the beat table (BPM), all randomness from a seeded
+// PRNG. That is what makes parallel, out-of-order rendering possible.
+//
+//   Headless render:  node render.js --out out/reel.mp4        (see README.md)
+//   Live preview:     serve this folder, open index.html?play=1
+//   URL overrides:    ?w=1080&h=1920&fps=30&blur=4&seed=7
+//
+// Edit CONFIG below: brand copy, palette, fonts, BPM, fps, scenes.
+// ============================================================================
+
+const CONFIG = {
+  brand: {
+    name: 'BRAND',              // drawn as the particle word + end-card wordmark
+    accentChar: '.',            // trailing glyph painted in the action color
+    reelName: 'THE REEL',
+    tagline: 'YOUR TAGLINE · CITY → WORLDWIDE',
+    line: 'Every frame, on purpose.',
+  },
+  // ── EXAMPLE PALETTE: "signal" preset ─────────────────────────────────────
+  // Replace with the output of
+  //   node ~/.claude/skills/motion-reel/assets/palette/palette.mjs --preset <name> --format config
+  // (same keys). Roles, not colors: ink = dark field, bone = light field,
+  // action = hot accent, machine = cool accent; on* = text on that field,
+  // hudOn* = HUD on that field; forbiddenPairs = never text-on-background.
+  palette: {
+    ink: "#0B0B0D",
+    bone: "#EDEAE3",
+    action: "#FF3B1F",
+    machine: "#2B35FF",
+    onInk: "#EDEAE3",
+    onBone: "#0B0B0D",
+    onAction: "#0B0B0D",
+    onMachine: "#EDEAE3",
+    hudOnInk: "#A9A7A3",
+    hudOnBone: "#4F4E4D",
+    hudOnAction: "#3C1511",
+    hudOnMachine: "#D0CFE7",
+    forbiddenPairs: [["ink", "machine"], ["bone", "action"], ["action", "machine"]],
+  },
+  // ── Fonts (Archivo / Space Mono / Hanken Grotesk are EXAMPLES) ──────────
+  // display MUST have a wdth axis for kinetic width. Either `css2` (Google
+  // Fonts CSS2 family spec, fetched at boot) or `files` (self-hosted woff2:
+  // [{ url: 'fonts/Display.woff2' }]). If loading fails, the template falls
+  // back to `fallback` and simulates width with a horizontal scale.
+  fonts: {
+    display: { family: 'Archivo', css2: 'Archivo:wdth,wght@62..125,100..900', wdth: [62, 125], fallback: '"Arial Black", Impact, sans-serif' },
+    mono: { family: 'Space Mono', css2: 'Space+Mono:wght@400;700', fallback: 'ui-monospace, monospace' },
+    sans: { family: 'Hanken Grotesk', css2: 'Hanken+Grotesk:wght@400;500;600', fallback: 'system-ui, sans-serif' },
+  },
+  bpm: 128,
+  fps: 30,
+  width: 1920,
+  height: 1080,
+  blur: 12,        // motion-blur subframes per frame (1 = off). Cost is linear.
+  shutter: 0.65,   // fraction of a frame the virtual shutter stays open
+  seed: 1337,
+  particles: 5000, // at 1920×1080; scaled by frame area
+  silence: 0.1,    // seconds of silence (and empty field) before the final hit
+  // Storyboard. beats = length; field = color field; big = heavy audio hit on
+  // entry; cuts = extra hard cuts in local beats. Sum of beats = reel length
+  // (64 beats @ 128 BPM = 30.0 s).
+  scenes: [
+    { type: 'leader', beats: 4, field: 'ink' },
+    { type: 'title', beats: 8, field: 'bone', big: true, text: 'YOUR HEADLINE HERE', sub: 'BRAND — SUBTITLE · VOL.01', meta: 'CAMPAIGN / MOTION SYSTEM' },
+    { type: 'palette', beats: 6, field: 'ink', cuts: [1, 2, 3, 4], roles: { ink: 'SYSTEM', bone: 'HUMAN', action: 'ACTION', machine: 'MACHINE' } },
+    { type: 'widthType', beats: 4, field: 'bone', word: 'MOVE' },
+    { type: 'particles', beats: 8, field: 'ink', big: true, from: 'NOISE', to: 'SIGNAL', words: ['YOUR', 'BOLD', 'CLAIM.'] },
+    { type: 'echo', beats: 4, field: 'action', big: true, text: 'BOLD CLAIM.', strap: 'YOUR PROOF LINE GOES HERE.' },
+    { type: 'morph', beats: 8, field: 'bone', shapes: ['circle', 'square', 'triangle', 'hexagon', 'star', 'circle'], at: [0, 1, 2, 3, 4, 6], items: ['STRATEGY', 'DESIGN', 'BUILD', 'LAUNCH', 'SCALE', 'CARE'] },
+    { type: 'tunnel', beats: 6, field: 'ink', title: 'DEPTH / STACK', items: ['LAYER 01', 'LAYER 02', 'LAYER 03', 'LAYER 04', 'LAYER 05', 'LAYER 06', 'LAYER 07', 'LAYER 08'] },
+    { type: 'graph', beats: 8, field: 'bone', title: 'PROCESS', stages: ['DISCOVER', 'DESIGN', 'BUILD', 'LAUNCH'] },
+    { type: 'end', beats: 8, field: 'ink', big: true },
+  ],
+};
+
+// ---------------------------------------------------------------- URL overrides
+const Q = new URLSearchParams(location.search);
+const qn = (k, d) => (Q.has(k) ? Number(Q.get(k)) : d);
+const W = qn('w', CONFIG.width), H = qn('h', CONFIG.height), FPS = qn('fps', CONFIG.fps);
+const BLUR = Math.max(1, Math.round(qn('blur', CONFIG.blur))), SEED = qn('seed', CONFIG.seed);
+const BPM = CONFIG.bpm, SPB = 60 / BPM, FPB = SPB * FPS;       // seconds / frames per beat
+const bf = b => Math.round(b * FPB);                              // beat -> frame (cut points)
+const U = Math.min(W, H) / 1080;                                  // layout unit
+const PORTRAIT = H > W;
+const M = Math.round(Math.min(W, H) * 0.09);                      // safe margin
+
+// ---------------------------------------------------------------- beat table
+let acc0 = 0;
+const SCENES = CONFIG.scenes.map((s, id) => { const o = { ...s, id, b0: acc0, b1: acc0 + s.beats }; acc0 += s.beats; return o; });
+const TOTAL_BEATS = acc0;
+const TOTAL = Math.round(TOTAL_BEATS * SPB * FPS);
+const FINAL_BEAT = TOTAL_BEATS - 1;                               // last downbeat = the final hit
+const FINAL_F = bf(FINAL_BEAT);
+const SILENCE_F0 = Math.round((FINAL_BEAT * SPB - CONFIG.silence) * FPS);
+const CUT_BEATS = [...new Set(SCENES.flatMap(s => [s.b0, ...(s.cuts || []).map(c => s.b0 + c)]).concat(FINAL_BEAT))].sort((a, b) => a - b);
+const CUT_FRAMES = [...new Set([...CUT_BEATS.map(bf), SILENCE_F0, TOTAL])].sort((a, b) => a - b);
+// Exported for render.js → timing.json → make_audio.py (picture and sound share one table).
+window.REEL = {
+  width: W, height: H, fps: FPS, bpm: BPM, totalBeats: TOTAL_BEATS, totalFrames: TOTAL, duration: TOTAL / FPS,
+  cuts: CUT_BEATS, big: SCENES.filter(s => s.big).map(s => s.b0), finalBeat: FINAL_BEAT, silence: CONFIG.silence,
+  scenes: SCENES.map(s => ({ type: s.type, b0: s.b0, b1: s.b1 })),
+};
+
+// ---------------------------------------------------------------- math / easing
+const cl = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const prog = (x, s, d) => cl((x - s) / d);
+const fract = x => x - Math.floor(x);
+const E = {
+  expoOut: x => (x >= 1 ? 1 : 1 - Math.pow(2, -10 * x)),
+  expoIn: x => (x <= 0 ? 0 : Math.pow(2, 10 * x - 10)),
+  expoInOut: x => (x <= 0 ? 0 : x >= 1 ? 1 : x < 0.5 ? Math.pow(2, 20 * x - 10) / 2 : (2 - Math.pow(2, -20 * x + 10)) / 2),
+  cubicOut: x => 1 - Math.pow(1 - x, 3),
+  cubicInOut: x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2),
+  backOut: (x, s = 1.9) => 1 + (s + 1) * Math.pow(x - 1, 3) + s * Math.pow(x - 1, 2),
+  bounceOut: x => {
+    const n = 7.5625, d = 2.75;
+    if (x < 1 / d) return n * x * x;
+    if (x < 2 / d) return n * (x -= 1.5 / d) * x + 0.75;
+    if (x < 2.5 / d) return n * (x -= 2.25 / d) * x + 0.9375;
+    return n * (x -= 2.625 / d) * x + 0.984375;
+  },
+};
+/** CSS-style cubic-bezier(x1, y1, x2, y2) easing (bisection on x). */
+function bezierEase(x1, y1, x2, y2) {
+  const bx = t => 3 * (1 - t) * (1 - t) * t * x1 + 3 * (1 - t) * t * t * x2 + t * t * t;
+  const by = t => 3 * (1 - t) * (1 - t) * t * y1 + 3 * (1 - t) * t * t * y2 + t * t * t;
+  return x => {
+    if (x <= 0) return 0; if (x >= 1) return 1;
+    let lo = 0, hi = 1, t = x;
+    for (let i = 0; i < 30; i++) { t = (lo + hi) / 2; if (bx(t) < x) lo = t; else hi = t; }
+    return by(t);
+  };
+}
+const SNAP_EASE = bezierEase(0.7, 0, 0.2, 1);
+
+// ---------------------------------------------------------------- seeded PRNG
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const hash = (a, b = 0) => mulberry32((a * 374761393 + b * 668265263 + SEED * 2246822519) ^ 0x5bd1e995)();
+
+// ---------------------------------------------------------------- palette (roles)
+const P = CONFIG.palette;
+const up1 = s => s[0].toUpperCase() + s.slice(1);
+const on = f => P['on' + up1(f)];                        // text on field f
+const hudOn = f => P['hudOn' + up1(f)] || on(f);         // HUD on field f
+// WCAG contrast from hex (for accent fallbacks).
+const lum = hex => { const c = al(hex, 1).match(/\d+/g).slice(0, 3).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+const forbidden = (a, b) => (P.forbiddenPairs || []).some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+/** Accent role color on field f, or the field's own text color when it won't read. */
+function pick(role, f, min, text) {
+  if (role === f || (text && forbidden(role, f)) || contrast(P[role], P[f]) < min) return on(f);
+  return P[role];
+}
+const hot = f => pick('action', f, 2.2, false);      // graphics: rules, dots, dimension lines
+const cool = f => pick('machine', f, 2.2, false);
+const hotText = f => pick('action', f, 4.5, true);   // small text: must pass AA and not be a forbidden pair
+const coolText = f => pick('machine', f, 4.5, true);
+const RGBC = {};
+function al(hex, a) {
+  let c = RGBC[hex];
+  if (!c) { const h = hex.replace('#', ''); const v = parseInt(h.length === 3 ? h.replace(/./g, '$&$&') : h, 16); c = RGBC[hex] = [(v >> 16) & 255, (v >> 8) & 255, v & 255]; }
+  return `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+}
+
+// ---------------------------------------------------------------- canvases
+const main = document.getElementById('c');
+main.width = W; main.height = H;
+const mctx = main.getContext('2d');
+function mk(w = W, h = H, rf = false) { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d', { willReadFrequently: rf })]; }
+const [, bctx] = mk(W, H, true);   // subframe buffer
+const [acc, actx] = mk();          // blurred result
+const [tmp, tctx] = mk();          // glitch scratch
+const [chn, chctx] = mk();         // glitch channel
+const ACC = new Float32Array(W * H * 3);
+let OUTIMG = null;
+
+// ---------------------------------------------------------------- type system
+// spec: { f: 'display'|'mono'|'sans', size, wdth, wght, bold, color, align, ls, stroke, lw }
+const FD = CONFIG.fonts.display, WMIN = (FD.wdth || [100, 100])[0], WMAX = (FD.wdth || [100, 100])[1]; // wdth: null = static-width display font
+const MONO = `"${CONFIG.fonts.mono.family}", ${CONFIG.fonts.mono.fallback}`;
+const SANS = `"${CONFIG.fonts.sans.family}", ${CONFIG.fonts.sans.fallback}`;
+let VAR = false;   // true once the variable display font is registered per-wdth
+let CAP = 0.72;    // cap height / em of the display font, measured at boot
+const wd = sp => cl(sp.wdth ?? 100, WMIN, WMAX);
+function fontOf(sp) {
+  if (sp.f === 'mono') return `${sp.bold ? 700 : 400} ${sp.size}px ${MONO}`;
+  if (sp.f === 'sans') return `${sp.wght || 500} ${sp.size}px ${SANS}`;
+  return VAR ? `${sp.wght || 900} ${sp.size}px RD${Math.round(wd(sp))}` : `${sp.wght || 900} ${sp.size}px ${FD.fallback}`;
+}
+// Without the variable font, width is simulated with a horizontal scale.
+const sx = sp => (!VAR && (sp.f == null || sp.f === 'display') ? wd(sp) / 100 : 1);
+function strW(ctx, s, sp) { ctx.font = fontOf(sp); ctx.letterSpacing = (sp.ls || 0) + 'px'; const w = ctx.measureText(s).width * sx(sp); ctx.letterSpacing = '0px'; return w; }
+function str(ctx, s, x, y, sp) {
+  ctx.save();
+  ctx.font = fontOf(sp); ctx.letterSpacing = (sp.ls || 0) + 'px';
+  ctx.textAlign = sp.align || 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.translate(x, y); ctx.scale(sx(sp), 1);
+  if (sp.stroke) { ctx.strokeStyle = sp.color; ctx.lineWidth = sp.lw || 3; ctx.strokeText(s, 0, 0); }
+  else { ctx.fillStyle = sp.color; ctx.fillText(s, 0, 0); }
+  ctx.restore();
+}
+/** Font size that makes `s` exactly `w` px wide (width is linear in size). */
+const fitSize = (ctx, s, w, sp = {}) => (100 * w) / strW(ctx, s, { ...sp, size: 100 });
+const mono = (size, color, extra = {}) => ({ f: 'mono', size: size * U, color, ls: 3 * U, ...extra });
+const disp = (size, color, extra = {}) => ({ size, color, ...extra });
+/** Masked slide-up reveal. p: 0..1 in; out: 0..1 slides away upward. */
+function reveal(ctx, s, x, y, sp, p, out = 0) {
+  if (p <= 0) return;
+  const w = strW(ctx, s, sp), a = sp.align || 'left';
+  const x0 = a === 'center' ? x - w / 2 : a === 'right' ? x - w : x;
+  const capH = sp.f === 'mono' || sp.f === 'sans' ? 0.78 : CAP;
+  const pad = sp.size * 0.14, top = y - sp.size * capH - pad;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x0 - sp.size, top, w + sp.size * 2, y + pad * 1.6 - top); ctx.clip();
+  const travel = sp.size * (capH + 0.4);
+  str(ctx, s, x, y + (1 - p) * travel - out * travel, sp);
+  ctx.restore();
+}
+/** Typewriter with a block cursor (mono). */
+function typeOn(ctx, s, x, y, sp, p, cursor, t) {
+  const n = Math.floor(cl(p) * s.length + 1e-4);
+  const full = strW(ctx, s, sp), a = sp.align || 'left';
+  const x0 = a === 'center' ? x - full / 2 : a === 'right' ? x - full : x;
+  str(ctx, s.slice(0, n), x0, y, { ...sp, align: 'left' });
+  if (p > 0 && (p < 1 || fract(t / 16) < 0.5)) {
+    ctx.fillStyle = cursor; ctx.fillRect(x0 + strW(ctx, s.slice(0, n), sp) + 3 * U, y - sp.size * 0.78, sp.size * 0.55, sp.size * 0.95);
+  }
+}
+/** Deterministic scramble-decode for mono labels. */
+const GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#/%+';
+function scramble(s, p, seed) {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const lock = i / s.length;
+    if (s[i] === ' ' || p >= lock + 0.25) out += s[i];
+    else if (p > lock - 0.3) out += GLYPHS[Math.floor(hash(seed, i) * GLYPHS.length)];
+    else out += ' ';
+  }
+  return out;
+}
+/** Camera shake from impact beats: decaying deterministic wobble. */
+function shake(lb, impacts, amp = 14) {
+  let x = 0, y = 0;
+  for (const b of impacts) {
+    const d = lb - b; if (d < 0 || d > 1.2) continue;
+    const k = Math.exp(-d * 6) * amp * U;
+    x += Math.sin(d * 71 + b * 3) * k; y += Math.cos(d * 59 + b * 7) * k;
+  }
+  return [x, y];
+}
+const bg = (ctx, f) => { ctx.fillStyle = P[f]; ctx.fillRect(0, 0, W, H); };
+const p2 = n => String(n).padStart(2, '0');
+
+// ---------------------------------------------------------------- particles (text → particles)
+let NP = 0, PT = null;
+const HERO = { size: 0, step: 3 };
+function initParticles(ctx) {
+  const scene = SCENES.find(s => s.type === 'particles');
+  if (!scene) return;
+  NP = Math.round(CONFIG.particles * cl((W * H) / (1920 * 1080), 0.3, 2));
+  PT = {}; for (const k of ['tx', 'ty', 'cx', 'cy', 'ax', 'ay', 'fx', 'fy', 'px', 'py', 'd', 's']) PT[k] = new Float32Array(NP);
+  PT.acc = new Uint8Array(NP);
+  const [, o] = mk();
+  const word = CONFIG.brand.name, tail = CONFIG.brand.accentChar || '';
+  const size = Math.min(fitSize(o, word + tail, W * 0.76), (H * 0.3) / CAP);
+  HERO.size = size;
+  const sp = disp(size, '#fff');
+  const w = strW(o, word, sp), total = w + strW(o, tail, sp);
+  const x0 = W / 2 - total / 2, base = H * 0.5 + (CAP * size) / 2;
+  str(o, word, x0, base, sp);
+  str(o, tail, x0 + w, base, { ...sp, color: '#f00' }); // accent marker: red channel only
+  const img = o.getImageData(0, 0, W, H).data;
+  let area = 0;
+  for (let i = 3; i < img.length; i += 4) if (img[i] > 128) area++;
+  const step = Math.sqrt(area / NP) * 0.985;
+  HERO.step = step;
+  const cand = [];
+  for (let y = step / 2; y < H; y += step) for (let x = step / 2; x < W; x += step) {
+    const i = (Math.floor(y) * W + Math.floor(x)) * 4;
+    if (img[i + 3] > 128) cand.push([x, y, img[i + 1] < 100 ? 1 : 0]);
+  }
+  const r = mulberry32(SEED);
+  for (let i = cand.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [cand[i], cand[j]] = [cand[j], cand[i]]; }
+  for (let i = 0; i < NP; i++) {
+    const c = cand[i % Math.max(1, cand.length)] || [W / 2, H / 2, 0];
+    PT.tx[i] = c[0] + (i >= cand.length ? (r() - 0.5) * 3 : 0); PT.ty[i] = c[1]; PT.acc[i] = c[2];
+    PT.cx[i] = r() * W; PT.cy[i] = r() * H;
+    PT.ax[i] = (60 + r() * 320) * U; PT.ay[i] = (40 + r() * 220) * U;
+    PT.fx[i] = (0.6 + r() * 1.6) * (r() < 0.5 ? -1 : 1); PT.fy[i] = (0.6 + r() * 1.6) * (r() < 0.5 ? -1 : 1);
+    PT.px[i] = r() * 6.283; PT.py[i] = r() * 6.283;
+    PT.d[i] = r(); PT.s[i] = (2.4 + r() * 2.6) * U;
+  }
+  console.log(`[reel] particles ${NP} grid step ${step.toFixed(2)} cells ${cand.length}`);
+}
+
+// ---------------------------------------------------------------- shapes (perimeter resample)
+const NS = 240;
+function resample(verts) {
+  const segs = []; let L = 0;
+  for (let i = 0; i < verts.length; i++) { const a = verts[i], b = verts[(i + 1) % verts.length]; const l = Math.hypot(b[0] - a[0], b[1] - a[1]); segs.push([a, b, l]); L += l; }
+  const out = []; let si = 0, a0 = 0;
+  for (let k = 0; k < NS; k++) {
+    const d = (k / NS) * L;
+    while (a0 + segs[si][2] < d && si < segs.length - 1) { a0 += segs[si][2]; si++; }
+    const [a, b, l] = segs[si]; const t = (d - a0) / l;
+    out.push([lerp(a[0], b[0], t), lerp(a[1], b[1], t)]);
+  }
+  return out;
+}
+function regPoly(n, r, star = 0) {
+  const v = [], m = star ? n * 2 : n;
+  for (let i = 0; i < m; i++) { const a = -Math.PI / 2 + (i / m) * Math.PI * 2; const rr = star && i % 2 ? r * star : r; v.push([Math.cos(a) * rr, Math.sin(a) * rr]); }
+  return v;
+}
+// Unit-radius shapes, all starting at 12 o'clock so morphs never twist.
+const SHAPE_LIB = {
+  circle: () => Array.from({ length: NS }, (_, k) => { const a = -Math.PI / 2 + (k / NS) * Math.PI * 2; return [Math.cos(a), Math.sin(a)]; }),
+  square: () => resample([[0, -0.86], [0.86, -0.86], [0.86, 0.86], [-0.86, 0.86], [-0.86, -0.86]]),
+  triangle: () => resample(regPoly(3, 1.12).map(([x, y]) => [x, y + 0.18])),
+  hexagon: () => resample(regPoly(6, 1)),
+  star: () => resample(regPoly(5, 1.12, 0.45).map(([x, y]) => [x, y + 0.06])),
+};
+
+// ---------------------------------------------------------------- grain tiles
+const GRAIN = [];
+function initGrain() {
+  const r = mulberry32(SEED + 99);
+  for (let k = 0; k < 6; k++) {
+    const [c, g] = mk(512, 512);
+    const id = g.createImageData(512, 512);
+    for (let i = 0; i < id.data.length; i += 4) { const v = cl(Math.floor(128 + (r() + r() + r() - 1.5) * 150), 0, 255); id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 255; }
+    g.putImageData(id, 0, 0);
+    GRAIN.push(c);
+  }
+}
+
+// ---------------------------------------------------------------- graph-editor curve
+const CURVE = { pts: [], anchors: [], handles: [], anchorF: [], box: null };
+function initCurve() {
+  const px0 = PORTRAIT ? M + 60 * U : W * 0.135, px1 = W - (PORTRAIT ? M : W * 0.115);
+  const py0 = PORTRAIT ? H * 0.3 : H * 0.28, py1 = PORTRAIT ? H * 0.7 : H * 0.78;
+  CURVE.box = { px0, px1, py0, py1 };
+  const V = [0.04, 0.13, 0.37, 0.81, 0.94];
+  const A = V.map((v, i) => [lerp(px0 + 40 * U, px1 - 40 * U, i / 4), lerp(py1 - 20 * U, py0 + 20 * U, v)]);
+  CURVE.anchors = A;
+  const segs = [];
+  for (let i = 0; i < 4; i++) {
+    const a = A[i], b = A[i + 1], dx = (b[0] - a[0]) / 3;
+    const sa = i === 0 ? 0 : ((A[i + 1][1] - A[i - 1][1]) / (A[i + 1][0] - A[i - 1][0])) * 0.9;
+    const sb = i === 3 ? 0 : ((A[i + 2][1] - A[i][1]) / (A[i + 2][0] - A[i][0])) * 0.9;
+    segs.push([a, [a[0] + dx, a[1] + sa * dx], [b[0] - dx, b[1] - sb * dx], b]);
+  }
+  CURVE.handles = segs;
+  const raw = [];
+  for (const [a, c1, c2, b] of segs) for (let k = 0; k < 150; k++) {
+    const t = k / 150, u = 1 - t;
+    raw.push([u * u * u * a[0] + 3 * u * u * t * c1[0] + 3 * u * t * t * c2[0] + t * t * t * b[0], u * u * u * a[1] + 3 * u * u * t * c1[1] + 3 * u * t * t * c2[1] + t * t * t * b[1]]);
+  }
+  raw.push(A[4]);
+  // arc-length reparametrization → 1001 evenly spaced points (constant rider speed)
+  const cum = [0]; for (let i = 1; i < raw.length; i++) cum.push(cum[i - 1] + Math.hypot(raw[i][0] - raw[i - 1][0], raw[i][1] - raw[i - 1][1]));
+  const L = cum[cum.length - 1]; let j = 0;
+  for (let k = 0; k <= 1000; k++) {
+    const d = (k / 1000) * L; while (j < cum.length - 2 && cum[j + 1] < d) j++;
+    const t = (d - cum[j]) / (cum[j + 1] - cum[j] || 1);
+    CURVE.pts.push([lerp(raw[j][0], raw[j + 1][0], t), lerp(raw[j][1], raw[j + 1][1], t)]);
+  }
+  CURVE.anchorF = A.map(a => { let best = 0, bd = 1e9; CURVE.pts.forEach((p, i) => { const d = Math.hypot(p[0] - a[0], p[1] - a[1]); if (d < bd) { bd = d; best = i; } }); return best / 1000; });
+}
+const curveAt = f => { const i = cl(f) * 1000, i0 = Math.floor(i), i1 = Math.min(1000, i0 + 1), t = i - i0; return [lerp(CURVE.pts[i0][0], CURVE.pts[i1][0], t), lerp(CURVE.pts[i0][1], CURVE.pts[i1][1], t)]; };
+
+// ============================================================================
+// SCENES — draw(ctx, lb, t, s): lb = local beat (float), t = global frame
+// (float, subframe-accurate), s = scene config. Must be pure.
+// Optional fieldAt(lb, s) tells the HUD which field is on screen.
+// ============================================================================
+const SCENE_FNS = {};
+
+// ---- LEADER: 3·2·1 countdown, then the action dot irises open ----------------
+SCENE_FNS.leader = { draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f);
+  bg(ctx, f);
+  const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.36, big = Math.hypot(W, H);
+  const a0 = -Math.PI / 2, a = a0 + fract(lb) * Math.PI * 2;
+  if (lb < 3) { ctx.fillStyle = al(fg, 0.07); ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, big, a0, a); ctx.closePath(); ctx.fill(); }
+  ctx.strokeStyle = al(fg, 0.28); ctx.lineWidth = 2 * U;
+  ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
+  ctx.strokeStyle = al(fg, 0.55); ctx.lineWidth = 4 * U;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+  ctx.lineWidth = 2 * U; ctx.beginPath(); ctx.arc(cx, cy, R * 0.85, 0, Math.PI * 2); ctx.stroke();
+  for (let i = 0; i < 60; i++) {
+    const g = (i / 60) * Math.PI * 2, r1 = R * 1.03, r2 = R * (i % 5 ? 1.06 : 1.11);
+    ctx.beginPath(); ctx.moveTo(cx + Math.cos(g) * r1, cy + Math.sin(g) * r1); ctx.lineTo(cx + Math.cos(g) * r2, cy + Math.sin(g) * r2); ctx.stroke();
+  }
+  if (lb < 3) {
+    ctx.strokeStyle = fg; ctx.lineWidth = 4 * U;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * big, cy + Math.sin(a) * big); ctx.stroke();
+    const k = Math.floor(lb), p = fract(lb), size = R * 1.33;
+    const sc = 1 + 0.18 * (1 - E.expoOut(p / 0.35));
+    ctx.save(); ctx.translate(cx, cy); ctx.scale(sc, sc);
+    str(ctx, String(3 - k), 0, (CAP * size) / 2, disp(size, fg, { wdth: lerp(WMIN, 100, E.expoOut(p / 0.4)), align: 'center' }));
+    ctx.restore();
+  } else {
+    const p = lb - 3;
+    const r = p < 0.5 ? 34 * U * E.backOut(cl(p / 0.3)) : 34 * U + E.expoIn(cl((p - 0.5) / 0.5)) * big;
+    ctx.fillStyle = hot(f); ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  }
+  const lab = () => mono(16, al(fg, 0.8), { align: 'center' });
+  str(ctx, 'PICTURE START', cx, cy - R * 1.2, lab());
+  str(ctx, `${CONFIG.brand.name} — ${CONFIG.brand.reelName}`, cx, cy + R * 1.26, lab());
+  str(ctx, `${FPS} FPS · ${BPM} BPM`, cx, cy + R * 1.26 + 30 * U, lab());
+  const rr = mulberry32(Math.floor(t) * 7 + 3 + SEED); // film scratches + dust, per frame
+  ctx.fillStyle = al(fg, 0.18);
+  for (let i = 0; i < 3; i++) ctx.fillRect(rr() * W, 0, (1 + rr() * 1.5) * U, H);
+  for (let i = 0; i < 14; i++) { ctx.beginPath(); ctx.arc(rr() * W, rr() * H, rr() * 3 * U, 0, 7); ctx.fill(); }
+} };
+
+// ---- TITLE: one word slams per beat (scale + wdth overshoot + shake) ----------
+SCENE_FNS.title = { draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f);
+  bg(ctx, f);
+  const words = s.text.split(' ');
+  const lines = PORTRAIT ? words.map(w => [w]) : [words];
+  const texts = lines.map(l => l.join(' '));
+  const size = Math.min(...texts.map(x => fitSize(ctx, x, W - 2 * M)), (H * 0.5) / (lines.length * 1.15 * CAP));
+  const sp = disp(size, fg);
+  const space = strW(ctx, ' ', sp), lh = size * CAP * 1.25;
+  const [shx, shy] = shake(lb, words.map((_, i) => i), 16);
+  const zoom = 1 + 0.035 * E.cubicInOut(prog(lb, words.length, 3.5));
+  const cy = H * 0.44, y0 = cy - ((lines.length - 1) * lh) / 2;
+  ctx.save(); ctx.translate(W / 2 + shx, shy); ctx.scale(zoom, zoom);
+  let wi = 0, lastBase = 0, maxW = 0;
+  lines.forEach((line, li) => {
+    const ws = line.map(w => strW(ctx, w, sp)), total = ws.reduce((a, b) => a + b, 0) + space * (line.length - 1);
+    maxW = Math.max(maxW, total);
+    let x = -total / 2;
+    const base = y0 + li * lh + (CAP * size) / 2;
+    lastBase = base;
+    line.forEach((w, i) => {
+      const p = prog(lb, wi, 0.42);
+      if (p > 0) {
+        const k = lerp(2.3, 1, E.backOut(p, 2.2));
+        ctx.save(); ctx.translate(x + ws[i] / 2, base - (CAP * size) / 2); ctx.scale(k, k); ctx.globalAlpha = cl(p / 0.12);
+        str(ctx, w, 0, (CAP * size) / 2, { ...sp, wdth: lerp(WMAX, 100, E.expoOut(p)), align: 'center' });
+        ctx.restore();
+      }
+      x += ws[i] + space; wi++;
+    });
+  });
+  const rp = E.expoOut(prog(lb, words.length - 0.6, 0.9));
+  ctx.fillStyle = hot(f); ctx.fillRect(-maxW / 2, lastBase + 42 * U, maxW * rp, 14 * U);
+  ctx.restore();
+  typeOn(ctx, s.sub || '', W / 2, lastBase + 150 * U, mono(30, fg, { ls: 4 * U, align: 'center' }), prog(lb, words.length, 1.1), hot(f), t);
+  const mp = E.expoOut(prog(lb, words.length + 0.5, 0.8));
+  reveal(ctx, `FOR — ${CONFIG.brand.name}`, M, M + 70 * U, mono(18, fg, { bold: true }), mp);
+  reveal(ctx, s.meta || '', W - M, M + (PORTRAIT ? 110 : 70) * U, mono(18, fg, { align: 'right' }), mp);
+  reveal(ctx, 'NO. 01', M, H - M - 70 * U, mono(18, fg), E.expoOut(prog(lb, words.length + 1, 0.8)));
+} };
+
+// ---- PALETTE: one hard cut per field, hex slides up per glyph, then columns --
+const FIELDS = ['ink', 'bone', 'action', 'machine'];
+SCENE_FNS.palette = {
+  fieldAt: lb => (lb < 4 ? FIELDS[Math.floor(cl(lb, 0, 3.999))] : 'ink'),
+  draw(ctx, lb, t, s) {
+    const roles = s.roles || {};
+    if (lb < 4) {
+      const i = Math.floor(lb), p = lb - i, f = FIELDS[i], fg = on(f), hex = P[f].toUpperCase();
+      bg(ctx, f);
+      const size = Math.min(fitSize(ctx, hex, W - 2 * M), (H * 0.4) / CAP);
+      const wdth = lerp(WMAX, 100, E.expoOut(p / 0.6));
+      const sp = disp(size, fg, { wdth });
+      let x = W / 2 - strW(ctx, hex, sp) / 2;
+      const cy = H * 0.48, base = cy + (CAP * size) / 2;
+      ctx.save(); ctx.beginPath(); ctx.rect(0, cy - (CAP * size) / 2 - 30 * U, W, CAP * size + 60 * U); ctx.clip();
+      for (let c = 0; c < hex.length; c++) {
+        const cp = E.expoOut(prog(p, c * 0.035, 0.45));
+        str(ctx, hex[c], x, base + (1 - cp) * size, sp);
+        x += strW(ctx, hex[c], sp);
+      }
+      ctx.restore();
+      const rp = E.expoOut(prog(p, 0.08, 0.5)), rs = Math.min(118 * U, fitSize(ctx, 'MACHINE', W * 0.5, { wdth: 100 }));
+      reveal(ctx, roles[f] || f.toUpperCase(), M, H - M - 40 * U, disp(rs, fg, { wdth: lerp(WMIN, 100, rp) }), rp);
+      str(ctx, `COLOR ${p2(i + 1)} / 04`, M, M + 80 * U, mono(20, fg, { bold: true, ls: 4 * U }));
+      str(ctx, f.toUpperCase(), W - M, M + 80 * U, mono(20, fg, { bold: true, ls: 4 * U, align: 'right' }));
+      const c = al(P[f], 1).match(/\d+/g).slice(0, 3).map(v => v.padStart(3, '0')).join(' ');
+      str(ctx, 'RGB ' + c, W - M, H - M - 48 * U, mono(20, fg, { ls: 4 * U, align: 'right' }));
+      for (let k = 0; k < 4; k++) { ctx.globalAlpha = k === i ? 1 : 0.35; ctx.fillStyle = k === i ? hot(f) : fg; ctx.fillRect(M + k * 34 * U, M + 106 * U, 24 * U, 6 * U); }
+      ctx.globalAlpha = 1;
+    } else {
+      const p = lb - 4;
+      bg(ctx, 'ink');
+      const n = 4;
+      for (let i = 0; i < n; i++) {
+        const f = FIELDS[i], fg = on(f), e = E.expoOut(prog(p, i * 0.12, 0.7));
+        // landscape: columns rise from the bottom; portrait: rows slide in from the right
+        const rw = PORTRAIT ? W : W / n, rh = PORTRAIT ? H / n : H;
+        const rx = PORTRAIT ? (1 - e) * W : i * rw, ry = PORTRAIT ? i * rh : (1 - e) * H;
+        ctx.save(); ctx.beginPath(); ctx.rect(rx, ry, rw + 1, rh + 1); ctx.clip();
+        ctx.fillStyle = P[f]; ctx.fillRect(rx, ry, rw + 1, rh + 1);
+        const x = rx + 48 * U, bottom = ry + rh - (!PORTRAIT || i === n - 1 ? 80 * U : 0); // keep clear of the HUD
+        str(ctx, `${p2(i + 1)} — ${f.toUpperCase()}`, x, Math.max(ry + 60 * U, PORTRAIT ? 120 * U : 200 * U), mono(20, fg, { bold: true, ls: 4 * U }));
+        const rs = Math.min(...Object.values(roles).concat('MACHINE').map(r => fitSize(ctx, r, rw - 96 * U, { wdth: WMAX })), (rh * 0.35) / CAP);
+        str(ctx, roles[f] || f.toUpperCase(), x, bottom - 90 * U, disp(rs, fg, { wdth: lerp(WMAX, 80, E.expoOut(prog(p, 0.3 + i * 0.1, 0.6))) }));
+        str(ctx, P[f].toUpperCase(), x, bottom - 40 * U, mono(26, fg, { bold: true, ls: 2 * U }));
+        ctx.restore();
+      }
+    }
+  },
+};
+
+// ---- WIDTH TYPE: one word, wdth axis snaps narrow↔wide on every beat -------
+SCENE_FNS.widthType = { draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f), word = s.word || 'MOVE';
+  bg(ctx, f);
+  const k = Math.floor(lb), p = lb - k;
+  const from = k % 2 === 0 ? WMIN : WMAX, to = k % 2 === 0 ? WMAX : WMIN;
+  const wdth = lerp(from, to, E.expoOut(cl(p / 0.55)));
+  const size = Math.min(fitSize(ctx, word, W - 2 * M, { wdth: WMAX }), (H * 0.42) / CAP);
+  const sp = disp(size, fg, { wdth, align: 'center' });
+  const w = strW(ctx, word, sp), cy = H * 0.46, base = cy + (CAP * size) / 2, capTop = cy - (CAP * size) / 2;
+  const x0 = W / 2 - w / 2, x1 = W / 2 + w / 2;
+  ctx.strokeStyle = cool(f); ctx.lineWidth = 2 * U;
+  ctx.beginPath(); ctx.moveTo(0, base); ctx.lineTo(W, base); ctx.moveTo(0, capTop); ctx.lineTo(W, capTop); ctx.stroke();
+  ctx.setLineDash([6 * U, 8 * U]); ctx.strokeStyle = al(fg, 0.35); ctx.lineWidth = 1.5 * U;
+  ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke(); ctx.setLineDash([]);
+  str(ctx, 'CAP HEIGHT', M, capTop - 14 * U, mono(15, coolText(f)));
+  str(ctx, 'BASELINE', M, base + 28 * U, mono(15, coolText(f)));
+  str(ctx, word, W / 2, base, sp);
+  ctx.strokeStyle = hot(f); ctx.lineWidth = 2 * U;
+  ctx.beginPath(); ctx.moveTo(x0, capTop - 60 * U); ctx.lineTo(x0, base + 60 * U); ctx.moveTo(x1, capTop - 60 * U); ctx.lineTo(x1, base + 60 * U); ctx.stroke();
+  const dy = capTop - 44 * U;
+  ctx.beginPath(); ctx.moveTo(x0, dy); ctx.lineTo(x1, dy); ctx.stroke();
+  ctx.fillStyle = hot(f);
+  for (const [x, d] of [[x0, 1], [x1, -1]]) { ctx.beginPath(); ctx.moveTo(x, dy); ctx.lineTo(x + d * 14 * U, dy - 7 * U); ctx.lineTo(x + d * 14 * U, dy + 7 * U); ctx.fill(); }
+  const lab = `WDTH ${String(Math.round(wdth)).padStart(3, '0')} · W ${Math.round(w / U)} PX`;
+  const lsp = mono(16, hotText(f), { bold: true, ls: 2 * U, align: 'center' }), lw = strW(ctx, lab, lsp) + 24 * U;
+  ctx.fillStyle = P[f]; ctx.fillRect(W / 2 - lw / 2, dy - 14 * U, lw, 28 * U);
+  str(ctx, lab, W / 2, dy + 6 * U, lsp);
+  // specimen row: the three voices
+  const cols = [
+    [CONFIG.fonts.display.family.toUpperCase(), disp(46 * U, fg), `DISPLAY · 900 · WDTH ${WMIN}–${WMAX}`],
+    [CONFIG.fonts.sans.family, { f: 'sans', size: 46 * U, wght: 600, color: fg }, 'TEXT · SENTENCES · UI'],
+    [CONFIG.fonts.mono.family.toUpperCase(), mono(40, fg, { bold: true, ls: 0 }), 'HUD · LABELS · DATA'],
+  ];
+  const rowY = H - M - 110 * U;
+  cols.forEach(([name, spc, note], i) => {
+    const x = PORTRAIT ? M : M + i * ((W - 2 * M) / 3), y = PORTRAIT ? rowY - (2 - i) * 110 * U : rowY;
+    const ap = E.expoOut(prog(lb, 0.3 + i * 0.25, 0.7));
+    reveal(ctx, name, x, y, spc, ap);
+    reveal(ctx, note, x, y + 44 * U, mono(15, al(fg, 0.7), { ls: 2 * U }), ap);
+  });
+} };
+
+// ---- PARTICLES: noise converges into the brand word ------------------------
+SCENE_FNS.particles = { draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f);
+  bg(ctx, f);
+  const tb = lb + s.b0;
+  let locked = 0, ent = 0;
+  const pathB = new Path2D(), pathA = new Path2D();
+  for (let i = 0; i < NP; i++) {
+    const w = tb * 0.9;
+    const x = PT.cx[i] + PT.ax[i] * Math.sin(PT.fx[i] * w + PT.px[i]) + 0.45 * PT.ax[i] * Math.sin(1.7 * PT.fy[i] * w + PT.py[i]);
+    const y = PT.cy[i] + PT.ay[i] * Math.cos(PT.fy[i] * w + PT.py[i]) + 0.45 * PT.ay[i] * Math.cos(1.3 * PT.fx[i] * w + PT.px[i]);
+    const p = E.expoInOut(prog(lb, 2.4 + PT.d[i] * 1.3, 1.5));
+    if (p >= 0.999) locked++;
+    ent += 1 - p;
+    const jit = p > 0.99 ? Math.sin(t * 0.4 + i) * 0.6 * U : 0;
+    const X = lerp(x, PT.tx[i], p) + jit, Y = lerp(y, PT.ty[i], p);
+    const sz = lerp(PT.s[i], HERO.step * 0.8, p);
+    (PT.acc[i] ? pathA : pathB).rect(X - sz / 2, Y - sz / 2, sz, sz);
+  }
+  ctx.fillStyle = fg; ctx.fill(pathB);
+  ctx.fillStyle = hot(f); ctx.fill(pathA);
+  // state tag: FROM → TO (scramble-decode)
+  const done = lb >= 4.6, label = done ? s.to : s.from;
+  const tagSp = mono(20, fg, { bold: true, ls: 5 * U, align: 'center' });
+  const tw = strW(ctx, done ? s.to : s.from, tagSp) + 40 * U, tx = W / 2 - tw / 2, ty = M + 50 * U;
+  if (done) { ctx.fillStyle = fg; ctx.fillRect(tx, ty, tw, 44 * U); str(ctx, scramble(label, prog(lb, 4.6, 0.6), Math.floor(t)), W / 2, ty + 30 * U, { ...tagSp, color: P[f] }); }
+  else {
+    ctx.strokeStyle = hot(f); ctx.lineWidth = 2 * U; ctx.strokeRect(tx, ty, tw, 44 * U);
+    str(ctx, label, W / 2, ty + 30 * U, { ...tagSp, color: hotText(f) });
+    if (fract(lb * 2) < 0.5) { ctx.fillStyle = hot(f); ctx.beginPath(); ctx.arc(tx - 18 * U, ty + 22 * U, 6 * U, 0, 7); ctx.fill(); }
+  }
+  const rd = mono(16, al(fg, 0.75));
+  if (!PORTRAIT) str(ctx, `ENTROPY ${(ent / NP).toFixed(3)}`, M, M + 80 * U, rd);
+  str(ctx, `LOCKED ${String(locked).padStart(4, '0')} / ${NP}`, W - M, M + (PORTRAIT ? 140 : 80) * U, { ...rd, align: 'right', color: locked / NP > 0.99 ? hotText(f) : al(fg, 0.75) });
+  ctx.fillStyle = al(fg, 0.15); ctx.fillRect(M, M + 94 * U, 260 * U, 3 * U); ctx.fillStyle = hot(f); ctx.fillRect(M, M + 94 * U, 260 * U * (1 - ent / NP), 3 * U);
+  // headline: one word per beat, trailing period drops in
+  const words = s.words || [], hs = Math.min(96 * U, fitSize(ctx, words.join(' '), W - 2 * M)), hy = H - M - 60 * U;
+  const sp = disp(hs, fg), gap = strW(ctx, ' ', sp), wsz = words.map(w => strW(ctx, w, sp));
+  let x = W / 2 - (wsz.reduce((a, b) => a + b, 0) + gap * (words.length - 1)) / 2;
+  words.forEach((w, i) => {
+    const p = E.expoOut(prog(lb, 5 + i * 0.75, 0.5));
+    if (w.endsWith('.')) {
+      const body = w.slice(0, -1);
+      reveal(ctx, body, x, hy, sp, p);
+      reveal(ctx, '.', x + strW(ctx, body, sp), hy, { ...sp, color: hot(f) }, E.bounceOut(prog(lb, 5.3 + i * 0.75, 0.6)));
+    } else reveal(ctx, w, x, hy, sp, p);
+    x += wsz[i] + gap;
+  });
+} };
+
+// ---- ECHO: solid line bounces in, outline copies fan out and collapse --------
+SCENE_FNS.echo = { draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f), text = s.text;
+  bg(ctx, f);
+  const wp = lb > 2 ? lerp(100, 72, Math.sin(Math.PI * cl((lb - 2) / 0.9))) : 100;
+  const size = Math.min(fitSize(ctx, text, W - 2 * M * 0.6), (H * 0.3) / CAP);
+  const rowH = size * 0.86, cy = H * 0.5, base = (CAP * size) / 2;
+  const [shx, shy] = shake(lb, [0.62, 1, 2, 3], 12);
+  ctx.save(); ctx.translate(W / 2 + shx, cy + shy);
+  const spread = E.expoOut(prog(lb, 0.55, 0.7)), collapse = E.expoIn(prog(lb, 3.45, 0.55));
+  const beatK = Math.floor(cl(lb, 0, 3.99));
+  for (let k = -4; k <= 4; k++) {
+    if (!k) continue;
+    const hx = beatK >= 1 ? (k % 2 ? 1 : -1) * 110 * U * E.expoOut(prog(lb, beatK, 0.5)) * (beatK % 2 ? 1 : -1) : 0;
+    ctx.save(); ctx.translate(hx * Math.abs(k) * 0.6, k * rowH * spread * (1 - collapse));
+    ctx.globalAlpha = cl(1.15 - Math.abs(k) * 0.18) * spread;
+    str(ctx, text, 0, base, disp(size, fg, { wdth: wp, align: 'center', stroke: true, lw: 3 * U }));
+    ctx.restore();
+  }
+  const y = lerp(-cy - size, 0, E.bounceOut(prog(lb, 0, 0.75)));
+  ctx.fillStyle = P[f]; // knockout band so the outlines never cross the solid line
+  ctx.fillRect(-W, y - (CAP * size) / 2 - 22 * U, W * 2, CAP * size + 44 * U);
+  str(ctx, text, 0, y + base, disp(size, fg, { wdth: wp, align: 'center' }));
+  ctx.restore();
+  const mp = E.expoOut(prog(lb, 1, 0.6));
+  if (mp > 0 && s.strap) {
+    const ssp = mono(20, P[f], { bold: true, ls: 4 * U, align: 'center' });
+    const tw = Math.min(W - 2 * M, strW(ctx, s.strap, ssp) + 48 * U), sy = H - M - 40 * U;
+    ctx.fillStyle = fg; ctx.fillRect(W / 2 - (tw / 2) * mp, sy - 36 * U, tw * mp, 54 * U);
+    reveal(ctx, s.strap, W / 2, sy, ssp, E.expoOut(prog(lb, 1.15, 0.5)));
+  }
+} };
+
+// ---- MORPH: shape morphs ON the beat, outline echo lags, list tracks it -------
+SCENE_FNS.morph = { draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f);
+  bg(ctx, f);
+  const shapes = s.shapes.map(n => (SHAPE_LIB[n] || SHAPE_LIB.circle)()), at = s.at, items = s.items;
+  let k = 0; for (let i = 0; i < at.length; i++) if (lb >= at[i]) k = i;
+  const mp = k === 0 ? 1 : E.backOut(prog(lb, at[k], 0.55), 1.4);
+  const A = shapes[Math.max(0, k - 1)], B = shapes[k];
+  const R = Math.min(W, H) * 0.27 * E.backOut(prog(lb, 0, 0.6), 1.6);
+  const rot = lb * 0.18 + ((k * Math.PI) / 6) * E.expoOut(prog(lb, at[k], 0.6)) + (k > 0 ? ((k - 1) * Math.PI) / 6 : 0);
+  const cx = PORTRAIT ? W / 2 : W * 0.69, cy = PORTRAIT ? H * 0.34 : H * 0.5;
+  const pts = B.map((b, i) => [lerp(A[i][0], b[0], mp) * R, lerp(A[i][1], b[1], mp) * R]);
+  const tr = (p, r, sc = 1) => { const c = Math.cos(r), si = Math.sin(r); return [cx + (p[0] * c - p[1] * si) * sc, cy + (p[0] * si + p[1] * c) * sc]; };
+  const poly = (r, sc) => { ctx.beginPath(); pts.forEach((p, i) => { const q = tr(p, r, sc); i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); }); ctx.closePath(); };
+  ctx.strokeStyle = hot(f); ctx.lineWidth = 3 * U; poly(rot - 0.22, 1.12); ctx.stroke();   // lagging echo
+  ctx.fillStyle = fg; poly(rot, 1); ctx.fill();
+  ctx.fillStyle = P[f]; pts.forEach((p, i) => { if (i % 4) return; const q = tr(p, rot, 0.96); ctx.fillRect(q[0] - 1.5 * U, q[1] - 1.5 * U, 3 * U, 3 * U); });
+  ctx.fillStyle = cool(f); pts.forEach((p, i) => { if (i % 40) return; const q = tr(p, rot, 1.12); ctx.fillRect(q[0] - 6 * U, q[1] - 6 * U, 12 * U, 12 * U); });
+  str(ctx, `${NS} PTS · MORPH ${p2(k)}`, cx, cy + Math.min(W, H) * 0.39, mono(15, al(fg, 0.6), { align: 'center' }));
+  // label column
+  const X = M, top = PORTRAIT ? H * 0.64 : H * 0.23;
+  str(ctx, `${(s.label || 'CHAPTER')} — ${p2(k + 1)} / ${p2(items.length)}`, X, top, mono(20, fg, { bold: true, ls: 4 * U }));
+  ctx.fillStyle = hot(f); ctx.fillRect(X, top + 22 * U, 60 * U, 6 * U);
+  const size = Math.min(128 * U, fitSize(ctx, 'STRATEGY', (PORTRAIT ? W : W * 0.5) - 2 * M, { wdth: 88 }));
+  const ly = top + size * CAP + 70 * U;
+  const inP = E.expoOut(prog(lb, at[k], 0.5)), outP = k > 0 ? E.expoOut(prog(lb, at[k], 0.35)) : 1;
+  if (k > 0 && outP < 1) reveal(ctx, items[k - 1], X, ly, disp(size, fg, { wdth: 88 }), 1, outP);
+  reveal(ctx, items[k], X, ly, disp(size, fg, { wdth: lerp(WMIN, 88, E.expoOut(inP)) }), inP);
+  items.forEach((it, i) => {
+    const y = ly + 70 * U + i * 30 * U, act = i === k;
+    if (act) { ctx.fillStyle = hot(f); ctx.fillRect(X, y - 13 * U, 12 * U, 12 * U); }
+    str(ctx, `${p2(i + 1)}  ${it}`, X + 26 * U, y, mono(17, act ? fg : al(fg, 0.45), { bold: act, ls: 2 * U }));
+  });
+} };
+
+// ---- TUNNEL: faux-3D flight through rotating squares (pinhole camera) -------
+SCENE_FNS.tunnel = { draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f), items = s.items || [];
+  bg(ctx, f);
+  const N = 30, dz = 170, near = 60, fl = 720 * U, S = 560;
+  const cam = (lb * 1.25 + 0.35 * lb * lb) * dz * 1.4;          // accelerating dolly
+  const swayX = z => 160 * Math.sin(z * 0.0021), swayY = z => 90 * Math.cos(z * 0.0017);
+  const camX = swayX(cam + near), camY = swayY(cam + near);
+  const list = [];
+  for (let i = 0; i < N; i++) {
+    const idx = i + N * Math.floor((cam - i * dz) / (N * dz) + 1); // recycle squares forever
+    const z = idx * dz - cam;
+    if (z >= near && z <= near + N * dz) list.push({ idx, zw: idx * dz, z });
+  }
+  list.sort((a, b) => b.z - a.z); // painter's algorithm: far → near
+  const cx = W / 2, cy = H / 2;
+  for (const { idx, zw, z } of list) {
+    const k = fl / z, rot = zw * 0.0012 + lb * 0.35;
+    const ox = swayX(zw) - camX, oy = swayY(zw) - camY;
+    const fade = cl((near + N * dz - z) / (N * dz * 0.6)) * cl((z - near) / 120);
+    const pts = [[-S, -S], [S, -S], [S, S], [-S, S]].map(([x, y]) => {
+      const c = Math.cos(rot), sn = Math.sin(rot);
+      return [cx + (x * c - y * sn + ox) * k, cy + (x * sn + y * c + oy) * k * 0.9];
+    });
+    const col = idx % 5 === 0 ? hot(f) : idx % 7 === 3 ? cool(f) : fg;
+    ctx.strokeStyle = al(col, fade * (col === fg ? 0.85 : 1)); ctx.lineWidth = Math.max(1, 2.2 * k);
+    ctx.beginPath(); pts.forEach((p, j) => (j ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]))); ctx.closePath(); ctx.stroke();
+    if (items.length && idx % 2 === 0 && k / U > 0.35 && k / U < 3.2) {
+      const label = items[(((idx / 2) % items.length) + items.length) % items.length];
+      const fs = cl(26 * k, 10 * U, 72 * U);
+      ctx.globalAlpha = fade;
+      str(ctx, label, pts[0][0] + 10 * k, pts[0][1] + fs + 8 * k, { f: 'mono', bold: true, size: fs, color: col, ls: fs * 0.12 });
+      ctx.globalAlpha = 1;
+    }
+  }
+  const lp = E.expoOut(prog(lb, 0.1, 0.6)), ts = Math.min(92 * U, fitSize(ctx, s.title, W - 2 * M));
+  reveal(ctx, s.title, M, H - M - 50 * U, disp(ts, fg, { wdth: lerp(WMIN, 100, lp) }), lp);
+  if (!PORTRAIT) str(ctx, `Z −${String(Math.round(cam)).padStart(5, '0')} · ${items.length} LAYERS`, W - M, H - M - 56 * U, mono(18, al(fg, 0.8), { align: 'right' }));
+} };
+
+// ---- GRAPH EDITOR: bezier curve draws, handles pop, a dot rides it ----------
+SCENE_FNS.graph = { draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f), stages = s.stages;
+  bg(ctx, f);
+  const { px0, px1, py0, py1 } = CURVE.box;
+  const ip = E.expoOut(prog(lb, 0, 0.6));
+  reveal(ctx, s.title, M, M + 90 * U, disp(Math.min(84 * U, fitSize(ctx, s.title, W * 0.5)), fg, { wdth: lerp(WMIN, 100, ip) }), ip);
+  reveal(ctx, 'EASE — cubic-bezier(0.70, 0.00, 0.20, 1.00)', M, M + 132 * U, mono(PORTRAIT ? 14 : 18, fg, { ls: 1 * U }), E.expoOut(prog(lb, 0.2, 0.6)));
+  ctx.strokeStyle = al(fg, 0.08); ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = px0; x <= px1; x += 40 * U) { ctx.moveTo(x + 0.5, py0); ctx.lineTo(x + 0.5, py1); }
+  for (let y = py0; y <= py1; y += 40 * U) { ctx.moveTo(px0, y + 0.5); ctx.lineTo(px1, y + 0.5); }
+  ctx.stroke();
+  ctx.strokeStyle = al(fg, 0.45); ctx.lineWidth = 2 * U;
+  ctx.beginPath(); ctx.moveTo(px0, py0 - 20 * U); ctx.lineTo(px0, py1); ctx.lineTo(px1 + 20 * U, py1); ctx.stroke();
+  const A = CURVE.anchors;
+  const df = SNAP_EASE(prog(lb, 0.15, 3.2));  // draw fraction
+  const rf = SNAP_EASE(prog(lb, 1.2, 4.2));   // rider fraction
+  const [rx, ry] = curveAt(rf);
+  stages.forEach((st, i) => {
+    const xa = A[i][0], xb = A[i + 1][0];
+    ctx.strokeStyle = al(fg, 0.2); ctx.setLineDash([4 * U, 6 * U]);
+    ctx.beginPath(); ctx.moveTo(xb, py0); ctx.lineTo(xb, py1); ctx.stroke(); ctx.setLineDash([]);
+    const act = rx >= xa && rx < xb + (i === stages.length - 1 ? 1 : 0);
+    reveal(ctx, PORTRAIT ? st : `${p2(i + 1)} ${st}`, (xa + xb) / 2, py1 + 50 * U, mono(PORTRAIT ? 14 : 20, act ? hotText(f) : fg, { bold: true, ls: (PORTRAIT ? 1 : 4) * U, align: 'center' }), E.expoOut(prog(lb, 0.2 + i * 0.2, 0.6)));
+  });
+  ctx.strokeStyle = fg; ctx.lineWidth = 5 * U; ctx.lineCap = 'round';
+  ctx.beginPath(); const nD = Math.floor(df * 1000);
+  for (let i = 0; i <= nD; i++) { const p = CURVE.pts[i]; i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); }
+  ctx.stroke(); ctx.lineCap = 'butt';
+  CURVE.handles.forEach(([a, c1, c2, b], i) => {
+    const hA = E.backOut(prog(df, CURVE.anchorF[i] - 0.02, 0.08), 2.5), hB = E.backOut(prog(df, CURVE.anchorF[i + 1] - 0.05, 0.08), 2.5);
+    ctx.strokeStyle = cool(f); ctx.fillStyle = cool(f); ctx.lineWidth = 1.5 * U;
+    for (const [o, c, h] of [[a, c1, hA], [b, c2, hB]]) {
+      if (h <= 0) continue;
+      const hx = lerp(o[0], c[0], h), hy = lerp(o[1], c[1], h);
+      ctx.beginPath(); ctx.moveTo(o[0], o[1]); ctx.lineTo(hx, hy); ctx.stroke();
+      ctx.beginPath(); ctx.arc(hx, hy, 7 * U, 0, 7); ctx.fill();
+    }
+  });
+  A.forEach((a, i) => {
+    const ap = E.backOut(prog(df, CURVE.anchorF[i] - 0.03, 0.08), 2.5);
+    if (ap <= 0) return;
+    ctx.save(); ctx.translate(a[0], a[1]); ctx.rotate(Math.PI / 4); ctx.scale(ap * U, ap * U);
+    ctx.fillStyle = rf >= CURVE.anchorF[i] - 0.001 && lb > 1.2 ? hot(f) : P[f]; ctx.strokeStyle = fg; ctx.lineWidth = 3;
+    ctx.fillRect(-11, -11, 22, 22); ctx.strokeRect(-11, -11, 22, 22); ctx.restore();
+  });
+  if (lb > 1.2) {
+    ctx.strokeStyle = cool(f); ctx.lineWidth = 2 * U; ctx.beginPath(); ctx.moveTo(rx, py0 - 30 * U); ctx.lineTo(rx, py1); ctx.stroke();
+    ctx.fillStyle = cool(f); ctx.fillRect(rx - 58 * U, py0 - 62 * U, 116 * U, 32 * U);
+    str(ctx, `${String(Math.round(rf * 100)).padStart(3, '0')}% DONE`, rx, py0 - 40 * U, mono(15, f === 'machine' ? P[f] : on('machine'), { bold: true, ls: 1 * U, align: 'center' }));
+    for (let k = 12; k >= 1; k--) { const [qx, qy] = curveAt(SNAP_EASE(prog(lb - k * 0.05, 1.2, 4.2))); ctx.fillStyle = al(hot(f), 0.5 * (1 - k / 13)); ctx.beginPath(); ctx.arc(qx, qy, 16 * U * (1 - k / 16), 0, 7); ctx.fill(); }
+    ctx.fillStyle = hot(f); ctx.beginPath(); ctx.arc(rx, ry, 18 * U, 0, 7); ctx.fill();
+    ctx.strokeStyle = fg; ctx.lineWidth = 3 * U; ctx.stroke();
+  }
+  if (!PORTRAIT) { // easing inset
+    const bs = 150 * U, bx = W - M - bs - 60 * U, by = M;
+    ctx.globalAlpha = E.expoOut(prog(lb, 0.3, 0.6));
+    ctx.strokeStyle = al(fg, 0.3); ctx.lineWidth = 1.5 * U; ctx.strokeRect(bx, by, bs, bs);
+    ctx.strokeStyle = fg; ctx.lineWidth = 3 * U; ctx.beginPath();
+    for (let i = 0; i <= 60; i++) { const u = i / 60, q = [bx + u * bs, by + bs - SNAP_EASE(u) * bs]; i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); }
+    ctx.stroke();
+    const eu = prog(lb, 1.2, 4.2);
+    ctx.fillStyle = hot(f); ctx.beginPath(); ctx.arc(bx + eu * bs, by + bs - SNAP_EASE(eu) * bs, 7 * U, 0, 7); ctx.fill();
+    str(ctx, 'EASE', bx + bs + 14 * U, by + 14 * U, mono(13, fg, { bold: true, ls: 2 * U }));
+    ctx.globalAlpha = 1;
+  }
+} };
+
+// ---- END CARD: wordmark letters rise, dot bounces, held breath, final hit ----
+SCENE_FNS.end = { draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f);
+  bg(ctx, f);
+  const n = Math.round(t);
+  if (n >= SILENCE_F0 && n < FINAL_F) return; // the held breath (audio is silent too)
+  const finalLb = FINAL_BEAT - s.b0, hit = lb >= finalLb, hp = hit ? prog(lb, finalLb, 1) : 0;
+  const word = CONFIG.brand.name, tail = CONFIG.brand.accentChar || '';
+  const size = Math.min(fitSize(ctx, word + tail, W - 2 * M * 1.6), (H * 0.26) / CAP);
+  const sp = disp(size, fg), ww = strW(ctx, word, sp), total = ww + strW(ctx, tail, sp);
+  const wx = W / 2 - total / 2, cy = H * 0.43, base = cy + (CAP * size) / 2;
+  const punch = hit ? 1 + 0.06 * Math.exp(-hp * 8) : 1;
+  ctx.save(); ctx.translate(W / 2, cy); ctx.scale(punch, punch); ctx.translate(-W / 2, -cy);
+  ctx.save(); ctx.beginPath(); ctx.rect(0, base - CAP * size - 40 * U, W, CAP * size + 80 * U); ctx.clip();
+  let x = wx;
+  [...word].forEach((ch, i) => {
+    const e = E.expoOut(prog(lb, i * 0.07, 0.7));
+    str(ctx, ch, x, base + (1 - e) * (CAP * size + 60 * U), sp);
+    x += strW(ctx, ch, sp);
+  });
+  ctx.restore();
+  const dotP = E.bounceOut(prog(lb, 0.9, 0.8));
+  ctx.globalAlpha = cl(dotP * 4);
+  str(ctx, tail, wx + ww, base - (1 - dotP) * 600 * U, { ...sp, color: hot(f) });
+  ctx.globalAlpha = 1;
+  ctx.restore();
+  const ry = base + 70 * U, rp = E.expoOut(prog(lb, 1.5, 1)), rw = Math.max(total, W * 0.4);
+  ctx.fillStyle = al(fg, 0.9); ctx.fillRect(wx, ry, rw * rp, 2 * U);
+  ctx.fillStyle = hot(f); ctx.fillRect(wx, ry - 3 * U, 90 * U * rp, 8 * U);
+  typeOn(ctx, CONFIG.brand.tagline, wx, ry + 60 * U, mono(PORTRAIT ? 18 : 24, fg, { bold: true, ls: 4 * U }), prog(lb, 1.9, 1.1), hot(f), t);
+  const lp = E.expoOut(prog(lb, 3, 0.8));
+  ctx.globalAlpha = lp; str(ctx, CONFIG.brand.line, wx, ry + 132 * U + (1 - lp) * 16 * U, { f: 'sans', size: 34 * U, wght: 500, color: al(fg, 0.85) }); ctx.globalAlpha = 1;
+  if (hit) { // shockwave from the accent glyph
+    const dcx = wx + ww + strW(ctx, tail, sp) / 2, dcy = base - size * 0.08, r = 20 * U + E.expoOut(hp) * Math.hypot(W, H) * 0.7;
+    ctx.strokeStyle = al(hot(f), 1 - E.cubicOut(hp)); ctx.lineWidth = (10 * (1 - hp) + 1) * U;
+    ctx.beginPath(); ctx.arc(dcx, dcy, r, 0, 7); ctx.stroke();
+    ctx.strokeStyle = al(fg, 0.5 * (1 - E.cubicOut(hp))); ctx.lineWidth = 2 * U;
+    ctx.beginPath(); ctx.arc(dcx, dcy, r * 0.7, 0, 7); ctx.stroke();
+  }
+} };
+
+// ============================================================================
+// POST: glitch (RGB split + slices), vignette, grain, HUD
+// ============================================================================
+function rgbSplit(dx, dy) {
+  tctx.globalCompositeOperation = 'copy'; tctx.drawImage(main, 0, 0);
+  mctx.save(); mctx.globalCompositeOperation = 'copy'; mctx.fillStyle = '#000'; mctx.fillRect(0, 0, W, H);
+  mctx.globalCompositeOperation = 'lighter';
+  // channel masks (pure R/G/B) — technical, not brand colors
+  [['#f00', -dx, -dy], ['#0f0', 0, 0], ['#00f', dx, dy]].forEach(([col, ox, oy]) => {
+    chctx.globalCompositeOperation = 'copy'; chctx.drawImage(tmp, 0, 0);
+    chctx.globalCompositeOperation = 'multiply'; chctx.fillStyle = col; chctx.fillRect(0, 0, W, H);
+    mctx.drawImage(chn, ox, oy);
+  });
+  mctx.restore();
+}
+function slices(amount, seed) {
+  const r = mulberry32(seed * 131 + 7 + SEED);
+  tctx.globalCompositeOperation = 'copy'; tctx.drawImage(main, 0, 0);
+  const n = 4 + Math.floor(r() * 7 * amount);
+  for (let i = 0; i < n; i++) {
+    const y = Math.floor(r() * H), h = Math.max(1, Math.floor((6 + r() * 90 * amount) * U)), dx = (r() - 0.5) * 320 * amount * U;
+    mctx.drawImage(tmp, 0, y, W, h, dx, y, W, h);
+  }
+}
+function vignette() {
+  const g = mctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.5, W / 2, H / 2, Math.max(W, H) * 0.62);
+  g.addColorStop(0, al(P.ink, 0)); g.addColorStop(1, al(P.ink, 0.3));
+  mctx.fillStyle = g; mctx.fillRect(0, 0, W, H);
+}
+function grain(n) {
+  const r = mulberry32(n * 9301 + 49297 + SEED);
+  const tile = GRAIN[n % GRAIN.length], ox = Math.floor(r() * 512), oy = Math.floor(r() * 512);
+  mctx.save(); mctx.globalCompositeOperation = 'soft-light'; mctx.globalAlpha = 0.15;
+  mctx.translate(-ox, -oy);
+  for (let y = 0; y < H + 512; y += 512) for (let x = 0; x < W + 512; x += 512) mctx.drawImage(tile, x, y);
+  mctx.restore();
+}
+function hud(n, sc) {
+  const ctx = mctx, lb = n / FPB - sc.b0;
+  const field = (SCENE_FNS[sc.type].fieldAt || (() => sc.field))(lb, sc);
+  const col = hudOn(field);
+  ctx.save();
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2 * U;
+  const m = 36 * U, a = 30 * U;
+  ctx.beginPath();
+  ctx.moveTo(m, m + a); ctx.lineTo(m, m); ctx.lineTo(m + a, m);
+  ctx.moveTo(W - m - a, m); ctx.lineTo(W - m, m); ctx.lineTo(W - m, m + a);
+  ctx.moveTo(m, H - m - a); ctx.lineTo(m, H - m); ctx.lineTo(m + a, H - m);
+  ctx.moveTo(W - m - a, H - m); ctx.lineTo(W - m, H - m); ctx.lineTo(W - m, H - m - a);
+  ctx.stroke();
+  const sp = mono(15, col, { bold: true, ls: 2.5 * U }), ty = 72 * U, by = H - 60 * U, x0 = 64 * U, x1 = W - 64 * U;
+  const secs = Math.floor(n / FPS), beat = Math.min(TOTAL_BEATS, Math.floor(n / FPB) + 1);
+  str(ctx, `${CONFIG.brand.name} / ${CONFIG.brand.reelName}`, x0, ty, sp);
+  str(ctx, `TC 00:${p2(Math.floor(secs / 60))}:${p2(secs % 60)}:${p2(n % FPS)}`, x1, ty, { ...sp, align: 'right' });
+  str(ctx, `SCENE ${p2(sc.id)} / ${p2(SCENES.length - 1)} — ${sc.type.toUpperCase()}`, x0, by, sp);
+  const br = PORTRAIT ? `BEAT ${p2(beat)}/${TOTAL_BEATS}` : `${W}×${H} · ${FPS}FPS · ${BPM}BPM · BEAT ${p2(beat)}/${TOTAL_BEATS}`;
+  str(ctx, br, x1, by, { ...sp, align: 'right' });
+  const pulse = Math.exp(-fract(n / FPB) * 5); // beat pip flashes on every beat
+  ctx.globalAlpha = 0.3 + 0.7 * pulse; ctx.fillRect(x1 - strW(ctx, br, sp) - 24 * U, by - 12 * U, 12 * U, 12 * U); ctx.globalAlpha = 1;
+  const tx0 = PORTRAIT ? x0 : W * 0.32, tx1 = PORTRAIT ? x1 : W * 0.6, tyl = PORTRAIT ? by - 36 * U : by - 5 * U;
+  ctx.globalAlpha = 0.45; ctx.fillRect(tx0, tyl, tx1 - tx0, Math.max(1, U));
+  SCENES.forEach(s => ctx.fillRect(tx0 + ((tx1 - tx0) * s.b0) / TOTAL_BEATS, tyl - 4 * U, Math.max(1, U), 9 * U));
+  ctx.globalAlpha = 1; ctx.fillRect(tx0, tyl - U, ((tx1 - tx0) * n) / (TOTAL - 1), 3 * U);
+  ctx.restore();
+}
+
+// ============================================================================
+// renderFrame(n): pure function of n
+// ============================================================================
+function sceneAt(n) { for (let i = SCENES.length - 1; i >= 0; i--) if (n >= bf(SCENES[i].b0)) return SCENES[i]; return SCENES[0]; }
+function segmentOf(n) { let a = 0, b = TOTAL; for (const c of CUT_FRAMES) { if (c <= n) a = c; else { b = c; break; } } return [a, b]; }
+window.renderFrame = function (n) {
+  const sc = sceneAt(n), [s0, s1] = segmentOf(n), fn = SCENE_FNS[sc.type].draw;
+  const S = BLUR, b0f = sc.b0 * FPB;
+  if (S === 1) {
+    mctx.save(); fn(mctx, n / FPB - sc.b0, n, sc); mctx.restore();
+  } else {
+    // Motion blur: average S subframes spread over the shutter, clamped INSIDE
+    // the current cut segment so blur never smears across a hard cut.
+    ACC.fill(0);
+    for (let i = 0; i < S; i++) {
+      const t = cl(n + ((i + 0.5) / S - 0.5) * CONFIG.shutter, Math.max(s0, b0f), s1 - 0.02);
+      bctx.save(); fn(bctx, t / FPB - sc.b0, t, sc); bctx.restore();
+      const d = bctx.getImageData(0, 0, W, H).data;
+      for (let p = 0, q = 0; p < d.length; p += 4, q += 3) { ACC[q] += d[p]; ACC[q + 1] += d[p + 1]; ACC[q + 2] += d[p + 2]; }
+    }
+    if (!OUTIMG) OUTIMG = actx.createImageData(W, H);
+    const od = OUTIMG.data, inv = 1 / S;
+    for (let p = 0, q = 0; p < od.length; p += 4, q += 3) { od[p] = ACC[q] * inv + 0.5; od[p + 1] = ACC[q + 1] * inv + 0.5; od[p + 2] = ACC[q + 2] * inv + 0.5; od[p + 3] = 255; }
+    actx.putImageData(OUTIMG, 0, 0);
+    mctx.globalCompositeOperation = 'copy'; mctx.globalAlpha = 1; mctx.drawImage(acc, 0, 0);
+    mctx.globalCompositeOperation = 'source-over';
+  }
+  if (n === FINAL_F) { // final hit: one inverted frame
+    mctx.save(); mctx.globalCompositeOperation = 'difference'; mctx.fillStyle = '#fff'; mctx.fillRect(0, 0, W, H); mctx.restore();
+  }
+  const k = n - s0; // glitch on the first 3 frames after every cut
+  if (s0 > 0 && k < 3 && s0 !== SILENCE_F0) {
+    const amt = [1, 0.5, 0.2][k] * (s0 === FINAL_F ? 1.4 : 1);
+    rgbSplit(Math.round(22 * amt * U), Math.round(3 * amt * U * (hash(n, 1) - 0.5)));
+    slices(amt, n);
+  }
+  vignette();
+  grain(n);
+  hud(n, sc);
+};
+
+// ============================================================================
+// boot: fonts → measure → precompute → READY
+// ============================================================================
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout ' + ms + 'ms')), ms))]);
+// Canvas can't set font-variation-settings. Trick: register the SAME variable
+// font file once per integer wdth, each FontFace pinned to one `stretch`
+// value, named RD62…RD125. The browser clamps the wdth axis to that value.
+async function loadDisplay() {
+  let blocks = FD.files || null;
+  if (!blocks) {
+    const css = await (await fetch(`https://fonts.googleapis.com/css2?family=${FD.css2}&display=block`)).text();
+    blocks = css.split('/*').slice(1)
+      .map(b => ({ name: b.slice(0, b.indexOf('*/')).trim(), url: (b.match(/url\(([^)]+)\)/) || [])[1], unicodeRange: (b.match(/unicode-range:\s*([^;]+);/) || [])[1] }))
+      .filter(b => b.url && (b.name === 'latin' || b.name === 'latin-ext'));
+  }
+  if (!blocks.length) throw new Error('no display font files');
+  for (const bl of blocks) {
+    const data = await (await fetch(bl.url)).arrayBuffer();
+    const faces = [];
+    for (let w = WMIN; w <= WMAX; w++) faces.push(new FontFace('RD' + w, data, { stretch: w + '%', weight: '100 900', ...(bl.unicodeRange ? { unicodeRange: bl.unicodeRange } : {}) }));
+    await Promise.all(faces.map(f => f.load()));
+    faces.forEach(f => document.fonts.add(f));
+  }
+}
+async function loadFonts() {
+  const fams = [CONFIG.fonts.mono, CONFIG.fonts.sans].filter(f => f.css2).map(f => 'family=' + f.css2).join('&');
+  if (fams) {
+    const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = `https://fonts.googleapis.com/css2?${fams}&display=block`;
+    document.head.appendChild(l);
+    await withTimeout(new Promise(r => { l.onload = r; l.onerror = r; }), 8000).catch(() => {});
+  }
+  try { await withTimeout(loadDisplay(), 20000); VAR = true; }
+  catch (e) { console.log('[reel] display font fallback (' + e.message + ') — width simulated with scaleX'); }
+  await withTimeout(Promise.all([
+    document.fonts.load(`400 20px ${MONO}`, 'A→×'), document.fonts.load(`700 20px ${MONO}`, 'A→×'),
+    document.fonts.load(`500 20px ${SANS}`, 'Aa'), document.fonts.load(`600 20px ${SANS}`, 'Aa'),
+  ]), 8000).catch(() => {});
+  await document.fonts.ready;
+}
+(async () => {
+  await loadFonts();
+  mctx.font = fontOf({ size: 1000 }); CAP = mctx.measureText('H').actualBoundingBoxAscent / 1000 || 0.72;
+  initParticles(mctx); initGrain(); initCurve();
+  console.log(`[reel] ready ${W}x${H}@${FPS} frames=${TOTAL} beats=${TOTAL_BEATS} CAP=${CAP.toFixed(3)} VAR=${VAR} blur=${BLUR}`);
+  window.READY = true;
+  if (Q.has('play')) { // live preview only — NOT deterministic, never used by render.js
+    document.body.classList.add('play');
+    const t0 = performance.now();
+    const tick = now => { renderFrame(Math.floor(((now - t0) / 1000) * FPS) % TOTAL); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  } else if (Q.has('frame')) renderFrame(Number(Q.get('frame')));
+})().catch(e => console.error('[reel] boot failed ' + (e && e.stack)));
+</script>
+</body>
+</html>

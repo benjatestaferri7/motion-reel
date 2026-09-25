@@ -1,0 +1,306 @@
+/* =========================================================
+   motion-reel — design tokens + base utilities
+   ---------------------------------------------------------
+   ROLE-based palette. Four flat color fields, hard cuts,
+   radius 0, no shadows. Components NEVER hardcode colors:
+   they read these variables.
+
+     --reel-ink      dark field   (system / night)
+     --reel-bone     light field  (human / paper)
+     --reel-action   hot accent   (the hit, CTAs, the dot)
+     --reel-machine  cool accent  (data, guides, secondary field)
+
+   Every field has its own text token (--reel-on-<field>) and
+   HUD token (--reel-hud-on-<field>). Never assume "light text
+   on the cool field" or "dark text on the hot field" — the
+   palette generator decides per brand, contrast-checked.
+
+   Values are RGB channel triplets so both
+   `rgb(var(--reel-action))` and `rgb(var(--reel-action) / 0.5)`
+   work (and Tailwind's <alpha-value>, see tailwind-preset.ts).
+
+   Works with or without Tailwind.
+   ========================================================= */
+
+:root {
+  /* ── EXAMPLE PALETTE: "signal" preset ─────────────────────
+     Replace this whole block with the output of
+       node assets/palette/palette.mjs --preset <name> --format css
+     (or --brand "#hex" …). Same shape, byte for byte: RGB triplets. */
+  --reel-ink: 11 11 13; /* #0B0B0D */
+  --reel-bone: 237 234 227; /* #EDEAE3 */
+  --reel-action: 255 59 31; /* #FF3B1F */
+  --reel-machine: 43 53 255; /* #2B35FF */
+  --reel-on-ink: 237 234 227; /* #EDEAE3 */
+  --reel-on-bone: 11 11 13; /* #0B0B0D */
+  --reel-on-action: 11 11 13; /* #0B0B0D */
+  --reel-on-machine: 237 234 227; /* #EDEAE3 */
+  --reel-hud-on-ink: 169 167 163; /* #A9A7A3 */
+  --reel-hud-on-bone: 79 78 77; /* #4F4E4D */
+  --reel-hud-on-action: 60 21 17; /* #3C1511 */
+  --reel-hud-on-machine: 208 207 231; /* #D0CFE7 */
+  /* forbidden text/bg pairs: ink×machine, bone×action, action×machine */
+  /* ── end EXAMPLE PALETTE ─────────────────────────────── */
+
+  /* ── Fonts (EXAMPLE defaults) ─────────────────────────────
+     Point these at whatever your font loader exposes
+     (next/font variables, @fontsource families, <link>…).
+     Display MUST be a heavy grotesk with a wdth axis for the
+     kinetic width effects (Archivo is only the example). */
+  --reel-font-display: "Archivo", "Arial Black", system-ui, sans-serif;
+  --reel-font-sans: "Hanken Grotesk", system-ui, sans-serif;
+  --reel-font-mono: "Space Mono", ui-monospace, monospace;
+  /* wdth axis range of the display font (Archivo: 62..125) */
+  --reel-wdth-min: 62;
+  --reel-wdth-max: 125;
+
+  --nav-h: 3.5rem;
+
+  /* Type scale (fluid). Display sizes are huge on purpose. */
+  --reel-fs-hud: 10px;
+  --reel-fs-body: clamp(1rem, 0.95rem + 0.3vw, 1.125rem);
+  --reel-fs-h3: clamp(1.75rem, 3.6vw, 3.25rem);
+  --reel-fs-h2: clamp(2.6rem, 7vw, 7rem);
+  --reel-fs-h1: clamp(3.1rem, 12vw, 9rem);
+  --reel-fs-mega: clamp(3.5rem, 18vw, 18rem);
+
+  /* Motion vocabulary (CSS side; GSAP names live in gsap-setup.ts) */
+  --reel-ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --reel-ease-snap: cubic-bezier(0.7, 0, 0.2, 1);
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --nav-h: 4rem;
+  }
+}
+
+html {
+  background: rgb(var(--reel-ink));
+}
+
+body {
+  background: rgb(var(--reel-ink));
+  color: rgb(var(--reel-on-ink));
+  font-family: var(--reel-font-sans);
+  /* clip (not hidden): no scroll container is created, so position: sticky keeps working */
+  overflow-x: clip;
+}
+
+/* Anchored sections clear the fixed navbar when jumped to */
+section[id] {
+  scroll-margin-top: var(--nav-h);
+}
+
+::selection {
+  background: rgb(var(--reel-action));
+  color: rgb(var(--reel-on-action));
+}
+
+:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+
+/* ── Field tones: background + its paired text token ──────── */
+.tone-ink {
+  background: rgb(var(--reel-ink));
+  color: rgb(var(--reel-on-ink));
+}
+.tone-bone {
+  background: rgb(var(--reel-bone));
+  color: rgb(var(--reel-on-bone));
+}
+.tone-action {
+  background: rgb(var(--reel-action));
+  color: rgb(var(--reel-on-action));
+}
+.tone-machine {
+  background: rgb(var(--reel-machine));
+  color: rgb(var(--reel-on-machine));
+}
+
+/* ── Type voices ─────────────────────────────────────────── */
+.display {
+  font-family: var(--reel-font-display);
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: -0.035em;
+  line-height: 0.84;
+}
+
+.hud {
+  font-family: var(--reel-font-mono);
+  font-size: var(--reel-fs-hud);
+  line-height: 1.4;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* Kinetic width axis, driven by GSAP through --wdth */
+.wdth-var {
+  font-variation-settings: "wdth" var(--wdth, 100);
+}
+
+/* Outline type (echoes). Stroke follows the field's text color. */
+.text-outline {
+  color: transparent;
+  -webkit-text-stroke: 2px currentColor;
+}
+
+/* Masked line for slide-up reveals: <span class="line-mask"><span>…</span></span> */
+.line-mask {
+  display: block;
+  overflow: hidden;
+  padding-bottom: 0.06em;
+  margin-bottom: -0.06em;
+}
+.line-mask > span {
+  display: block;
+}
+
+/* Hairlines that follow the field text color (work on any field) */
+.border-soft {
+  border-color: color-mix(in srgb, currentColor 22%, transparent);
+}
+
+/* Buttons: radius 0, hard color swaps, mono labels */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  font-family: var(--reel-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  transition: background-color 0.2s, color 0.2s;
+}
+.btn-action {
+  background: rgb(var(--reel-action));
+  color: rgb(var(--reel-on-action));
+}
+.btn-action:hover {
+  background: rgb(var(--reel-bone));
+  color: rgb(var(--reel-on-bone));
+}
+
+/* Screen-reader-only (identical to Tailwind's; harmless if both exist) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ── HUD overlay (hud.tsx) ─────────────────────────────────
+   The HUD reads the field under the viewport middle and sets
+   data-field; its color comes from --reel-hud-on-<field>.
+   No mix-blend-mode needed (difference blend over a saturated
+   field produces an unpredictable, often illegible hue). */
+.reel-hud {
+  position: fixed;
+  inset: var(--nav-h) 0 0 0;
+  z-index: 60;
+  pointer-events: none;
+  color: rgb(var(--reel-hud-on-ink));
+  transition: color 0.12s steps(1);
+}
+.reel-hud[data-field="bone"] { color: rgb(var(--reel-hud-on-bone)); }
+.reel-hud[data-field="action"] { color: rgb(var(--reel-hud-on-action)); }
+.reel-hud[data-field="machine"] { color: rgb(var(--reel-hud-on-machine)); }
+/* Optional decorative mode — only safe on neutral fields. */
+.reel-hud--difference {
+  mix-blend-mode: difference;
+  color: rgb(255 255 255) !important;
+}
+.reel-hud__corner,
+.reel-hud__label {
+  position: absolute;
+  display: none;
+}
+.reel-hud__corner {
+  width: 16px;
+  height: 16px;
+  border: 0 solid currentColor;
+}
+@media (min-width: 768px) {
+  .reel-hud__corner,
+  .reel-hud__label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+}
+.reel-hud__bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 2px;
+  background: color-mix(in srgb, currentColor 20%, transparent);
+}
+@media (min-width: 768px) {
+  .reel-hud__bar {
+    left: 50%;
+    bottom: 1.4rem;
+    width: 28vw;
+    height: 1px;
+    transform: translateX(-50%);
+  }
+}
+
+/* ── Motion-only layouts ───────────────────────────────────
+   Pins / horizontal reels exist only when wide AND motion is
+   allowed. Mirrors MQ.pinnable in gsap-setup.ts. */
+.only-motion-desktop {
+  display: none;
+}
+@media (min-width: 1024px) and (prefers-reduced-motion: no-preference) {
+  .only-motion-desktop {
+    display: block;
+  }
+  .hreel-track {
+    display: flex;
+    flex-wrap: nowrap;
+    width: max-content;
+    height: 100svh;
+  }
+  .hreel-panel {
+    width: min(64vw, 1100px);
+    flex-shrink: 0;
+  }
+}
+
+/* ── Intro gating ──────────────────────────────────────────
+   `.reel-js` is added by an inline <head> script only when motion
+   is allowed (see leader.tsx → leaderBootScript). Elements marked
+   [data-intro] start hidden; a CSS failsafe reveals them after 4s
+   if JS never arrives, so content is never lost. */
+.reel-js [data-intro] {
+  visibility: hidden;
+  animation: reel-failsafe 0s linear 4s forwards;
+}
+@keyframes reel-failsafe {
+  to {
+    visibility: visible;
+  }
+}
+
+/* ── Reduced motion: static final states everywhere ─────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
