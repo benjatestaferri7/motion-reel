@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """make_audio.py — beat-locked soundtrack synthesized entirely by math.
 
-Reads the SAME beat table as the picture (timing.json written by render.js),
-so cuts, hits and the final silence line up by construction.
+Reads the SAME beat table as the picture (<out>.timing.json, written by
+render.js next to the video), so cuts, hits and the final silence line up by
+construction.
 
-    python3 make_audio.py --timing out/timing.json --out out/audio.wav
-    python3 make_audio.py --bpm 128 --beats 64 --cuts 4,12,18 --big 4,26 --out a.wav
+    python3 make_audio.py --timing out/reel.timing.json --out out/audio.wav
+    python3 make_audio.py --bpm 120 --beats 60 --cuts 4,12,18 --big 4,26 --out a.wav
+
+Arrangement from the timing: leader ticks only if the first scene is a
+`leader`; drums stop at the last scene (outro); the breakdown (no kick, snare
+roll) is the last 2-4 beats BEFORE the last scene, kept inside the scene
+before it, so the roll lands on the end card / final hit. Override with
+--intro / --outro / --breakdown a-b (use --breakdown none to disable).
 
 Voices: pitch-dropping sine kick, filtered-noise hats/claps, reverse whooshes
 into every cut, booms on big cuts, risers, 7-voice detuned-saw chord pad
@@ -37,15 +44,15 @@ except ImportError:  # pure-Python fallback
 
 # ------------------------------------------------------------------ CLI / timing
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-ap.add_argument('--timing', help='timing.json from render.js (overrides the flags below)')
-ap.add_argument('--bpm', type=float, default=128)
-ap.add_argument('--beats', type=int, default=64, help='total beats')
-ap.add_argument('--cuts', default='4,12,13,14,15,16,18,22,30,34,42,48,56', help='hard-cut beats (template defaults)')
-ap.add_argument('--big', default='4,22,30,56', help='beats that get a boom + riser')
+ap.add_argument('--timing', metavar='PATH', help='<out>.timing.json from render.js (e.g. out/reel.timing.json); overrides bpm/beats/cuts/big/final')
+ap.add_argument('--bpm', type=float, default=120)
+ap.add_argument('--beats', type=int, default=60, help='total beats')
+ap.add_argument('--cuts', default='4,12,13,14,15,16,18,22,30,34,42,48,54', help='hard-cut beats (template defaults)')
+ap.add_argument('--big', default='4,22,30,54', help='beats that get a boom + riser')
 ap.add_argument('--final', type=float, default=None, help='final hit beat (default beats-1)')
-ap.add_argument('--intro', type=float, default=4, help='beats of intro (leader ticks) before the groove')
-ap.add_argument('--outro', type=float, default=None, help='beat where drums stop (default: last scene start or beats-8)')
-ap.add_argument('--breakdown', default=None, help='a-b beats with no kick (default: 12..6 beats before outro)')
+ap.add_argument('--intro', type=float, default=None, help='beats of leader ticks before the groove (default: first scene length if it is a leader, else 0; 4 without timing)')
+ap.add_argument('--outro', type=float, default=None, help='beat where drums stop (default: last scene start; without timing the last cut)')
+ap.add_argument('--breakdown', default=None, help="a-b beats with no kick, or 'none' (default: 2-4 beats right before the outro)")
 ap.add_argument('--silence', type=float, default=0.1, help='seconds of silence before the final hit')
 ap.add_argument('--lufs', type=float, default=-14.0, help='integrated loudness target')
 ap.add_argument('--sr', type=int, default=None, help='sample rate (48000 with numpy, 22050 without)')
@@ -57,20 +64,34 @@ BPM, BEATS = A.bpm, A.beats
 CUTS = [float(x) for x in A.cuts.split(',') if x.strip()]
 BIG = [float(x) for x in A.big.split(',') if x.strip()]
 FINAL, SIL, INTRO, OUTRO = A.final, A.silence, A.intro, A.outro
+SC = []
 if A.timing:
-    T = json.load(open(A.timing))
+    try:
+        T = json.load(open(A.timing))
+    except FileNotFoundError:
+        sys.exit(f'timing file not found: {A.timing} (render.js writes <out>.timing.json next to the video)')
     BPM, BEATS = T['bpm'], T['totalBeats']
-    CUTS, BIG, FINAL, SIL = T['cuts'], T.get('big', []), T.get('finalBeat'), T.get('silence', SIL)
-    sc = T.get('scenes') or []
-    if len(sc) > 1:
-        INTRO = sc[1]['b0']
-        OUTRO = sc[-1]['b0'] if OUTRO is None else OUTRO
+    CUTS, BIG, SIL = T['cuts'], T.get('big', []), T.get('silence', SIL)
+    FINAL = T.get('finalBeat') if FINAL is None else FINAL
+    SC = T.get('scenes') or []
+    if INTRO is None:
+        INTRO = SC[1]['b0'] if len(SC) > 1 and SC[0].get('type') == 'leader' else 0
+    if OUTRO is None and len(SC) > 1:
+        OUTRO = SC[-1]['b0']
 FINAL = BEATS - 1 if FINAL is None else FINAL
-OUTRO = BEATS - 8 if OUTRO is None else OUTRO
-if A.breakdown:
+INTRO = 4 if INTRO is None else INTRO
+if OUTRO is None:
+    inner = [c for c in CUTS if INTRO < c < FINAL]
+    OUTRO = max(inner) if inner else BEATS - 8
+if A.breakdown and A.breakdown.lower() != 'none':
     BD0, BD1 = [float(x) for x in A.breakdown.split('-')]
-elif OUTRO - INTRO >= 20:
-    BD0, BD1 = OUTRO - 12, OUTRO - 6
+elif A.breakdown is None and OUTRO - INTRO >= 8:
+    # Breakdown = the beats right before the last scene, so the snare roll lands on
+    # the end card / final hit. Kept inside the scene before it (never straddles a cut).
+    BD1 = OUTRO
+    BD0 = max(OUTRO - (4 if OUTRO - INTRO >= 16 else 2), INTRO, SC[-2]['b0'] if len(SC) > 1 else 0)
+    if BD1 - BD0 < 1:
+        BD0 = BD1 = -1
 else:
     BD0 = BD1 = -1
 CUTS = [c for c in CUTS if 0 < c < BEATS and c != FINAL]
@@ -337,7 +358,8 @@ def pad_gain(b):
     return 0.55
 
 
-print(f'[audio] numpy={np is not None} sr={SR} bpm={BPM} beats={BEATS} dur={DUR:.3f}s', file=sys.stderr)
+print(f'[audio] numpy={np is not None} sr={SR} bpm={BPM} beats={BEATS} dur={DUR:.3f}s intro=0-{INTRO:g} '
+      f'outro={OUTRO:g} breakdown=' + (f'{BD0:g}-{BD1:g} ({bt(BD0):.2f}-{bt(BD1):.2f}s)' if BD1 > BD0 >= 0 else 'none'), file=sys.stderr)
 
 # pad: one chord per bar
 PL, PR = zeros(N), zeros(N)
@@ -368,7 +390,7 @@ for b in kicks:
     mix_into(KB, kick(0.95), bs(b))
 nb = int(SPB * 0.5 * SR * 0.95)
 for b in range(int(INTRO), int(OUTRO)):
-    if BD0 <= b < BD0 + 4:
+    if in_bd(b):
         continue
     root = BASS[(b // 4) % 4]
     f = midi(root + 12)

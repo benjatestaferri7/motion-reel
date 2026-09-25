@@ -21,10 +21,15 @@
 //   Live preview:     serve this folder, open index.html?play=1
 //   URL overrides:    ?w=1080&h=1920&fps=30&blur=4&seed=7
 //
-// Edit CONFIG below: brand copy, palette, fonts, BPM, fps, scenes.
+// renderFrame(n) returns undefined, or a Promise when the scene has an async
+// prepare() step (the `frames` scene fetches pre-rendered images first).
+// render.js awaits either.
+//
+// Edit CONFIG below: brand copy, palette(s), fonts, BPM, fps, scenes.
 // ============================================================================
 
 const CONFIG = {
+  title: 'BRAND / THE REEL',    // HUD top-left corner text
   brand: {
     name: 'BRAND',              // drawn as the particle word + end-card wordmark
     accentChar: '.',            // trailing glyph painted in the action color
@@ -38,6 +43,8 @@ const CONFIG = {
   // (same keys). Roles, not colors: ink = dark field, bone = light field,
   // action = hot accent, machine = cool accent; on* = text on that field,
   // hudOn* = HUD on that field; forbiddenPairs = never text-on-background.
+  // This is the default palette. For more than one per reel, add named ones
+  // to `palettes` (same keys) and pick them per scene with `palette: 'name'`.
   palette: {
     ink: "#0B0B0D",
     bone: "#EDEAE3",
@@ -53,17 +60,25 @@ const CONFIG = {
     hudOnMachine: "#D0CFE7",
     forbiddenPairs: [["ink", "machine"], ["bone", "action"], ["action", "machine"]],
   },
+  palettes: {
+    // acid: { ink: "#0C0D0A", bone: "#F0EFE7", action: "#D4F53C", machine: "#2331D6", onInk: "#F0EFE7", … },
+  },
   // ── Fonts (Archivo / Space Mono / Hanken Grotesk are EXAMPLES) ──────────
-  // display MUST have a wdth axis for kinetic width. Either `css2` (Google
-  // Fonts CSS2 family spec, fetched at boot) or `files` (self-hosted woff2:
-  // [{ url: 'fonts/Display.woff2' }]). If loading fails, the template falls
-  // back to `fallback` and simulates width with a horizontal scale.
+  // Display faces: `css2` (Google Fonts CSS2 family spec, fetched at boot) or
+  // `files` (self-hosted woff2: [{ url: 'fonts/Display.woff2' }]).
+  // wdth: [min, max] = real variable width axis (css2 must request `wdth`).
+  // wdth: null = no width axis: width moves are simulated with scaleX over
+  // simWdth (default [75, 125]; [100, 100] disables them).
+  // If loading fails, `fallback` is used and width is simulated the same way.
+  // Extra display faces (any key besides mono/sans) are picked per scene with
+  // `font: 'key'` (or an inline spec object).
   fonts: {
     display: { family: 'Archivo', css2: 'Archivo:wdth,wght@62..125,100..900', wdth: [62, 125], fallback: '"Arial Black", Impact, sans-serif' },
     mono: { family: 'Space Mono', css2: 'Space+Mono:wght@400;700', fallback: 'ui-monospace, monospace' },
     sans: { family: 'Hanken Grotesk', css2: 'Hanken+Grotesk:wght@400;500;600', fallback: 'system-ui, sans-serif' },
+    // condensed: { family: 'Bebas Neue', css2: 'Bebas+Neue', wdth: null, fallback: 'Impact, sans-serif' },
   },
-  bpm: 128,
+  bpm: 120,        // 120 BPM = 15 frames/beat @30fps, 30 @60fps (whole frames)
   fps: 30,
   width: 1920,
   height: 1080,
@@ -74,7 +89,11 @@ const CONFIG = {
   silence: 0.1,    // seconds of silence (and empty field) before the final hit
   // Storyboard. beats = length; field = color field; big = heavy audio hit on
   // entry; cuts = extra hard cuts in local beats. Sum of beats = reel length
-  // (64 beats @ 128 BPM = 30.0 s).
+  // (60 beats @ 120 BPM = 30.0 s). Internal timings scale with `beats`; a scene
+  // below its minimum logs a [reel] WARN.
+  // Any scene also takes: label (HUD name; default = Title Case of type),
+  // palette (key of `palettes`), font (key of `fonts`), blur (max subframes),
+  // post: false (no vignette/grain).
   scenes: [
     { type: 'leader', beats: 4, field: 'ink' },
     { type: 'title', beats: 8, field: 'bone', big: true, text: 'YOUR HEADLINE HERE', sub: 'BRAND — SUBTITLE · VOL.01', meta: 'CAMPAIGN / MOTION SYSTEM' },
@@ -84,8 +103,11 @@ const CONFIG = {
     { type: 'echo', beats: 4, field: 'action', big: true, text: 'BOLD CLAIM.', strap: 'YOUR PROOF LINE GOES HERE.' },
     { type: 'morph', beats: 8, field: 'bone', shapes: ['circle', 'square', 'triangle', 'hexagon', 'star', 'circle'], at: [0, 1, 2, 3, 4, 6], items: ['STRATEGY', 'DESIGN', 'BUILD', 'LAUNCH', 'SCALE', 'CARE'] },
     { type: 'tunnel', beats: 6, field: 'ink', title: 'DEPTH / STACK', items: ['LAYER 01', 'LAYER 02', 'LAYER 03', 'LAYER 04', 'LAYER 05', 'LAYER 06', 'LAYER 07', 'LAYER 08'] },
-    { type: 'graph', beats: 8, field: 'bone', title: 'PROCESS', stages: ['DISCOVER', 'DESIGN', 'BUILD', 'LAUNCH'] },
-    { type: 'end', beats: 8, field: 'ink', big: true },
+    { type: 'graph', beats: 6, field: 'bone', title: 'PROCESS', stages: ['DISCOVER', 'DESIGN', 'BUILD', 'LAUNCH'] },
+    { type: 'end', beats: 6, field: 'ink', big: true },
+    // More scene types (real numbers only; never invent metrics):
+    // { type: 'counters', beats: 4, field: 'machine', title: 'PROOF', items: [{ value: 120, suffix: '+', label: 'PROJECTS SHIPPED' }, { value: 4.9, decimals: 1, label: 'AVG RATING' }] },
+    // { type: 'frames', beats: 8, field: 'bone', src: 'out/riso_frames/', offset: 0, text: 'RISO', sub: '3 INKS · HALFTONE' },
   ],
 };
 
@@ -101,8 +123,9 @@ const PORTRAIT = H > W;
 const M = Math.round(Math.min(W, H) * 0.09);                      // safe margin
 
 // ---------------------------------------------------------------- beat table
+const titleCase = s => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 let acc0 = 0;
-const SCENES = CONFIG.scenes.map((s, id) => { const o = { ...s, id, b0: acc0, b1: acc0 + s.beats }; acc0 += s.beats; return o; });
+const SCENES = CONFIG.scenes.map((s, id) => { const o = { ...s, id, b0: acc0, b1: acc0 + s.beats, label: s.label ?? titleCase(s.type) }; acc0 += s.beats; return o; });
 const TOTAL_BEATS = acc0;
 const TOTAL = Math.round(TOTAL_BEATS * SPB * FPS);
 const FINAL_BEAT = TOTAL_BEATS - 1;                               // last downbeat = the final hit
@@ -114,8 +137,9 @@ const CUT_FRAMES = [...new Set([...CUT_BEATS.map(bf), SILENCE_F0, TOTAL])].sort(
 window.REEL = {
   width: W, height: H, fps: FPS, bpm: BPM, totalBeats: TOTAL_BEATS, totalFrames: TOTAL, duration: TOTAL / FPS,
   cuts: CUT_BEATS, big: SCENES.filter(s => s.big).map(s => s.b0), finalBeat: FINAL_BEAT, silence: CONFIG.silence,
-  scenes: SCENES.map(s => ({ type: s.type, b0: s.b0, b1: s.b1 })),
+  scenes: SCENES.map(s => ({ type: s.type, label: s.label, b0: s.b0, b1: s.b1 })),
 };
+if (Math.abs(FPB - Math.round(FPB)) > 1e-6) console.log(`[reel] WARN ${BPM} BPM @ ${FPS} fps = ${FPB.toFixed(4)} frames/beat (not whole): cut frames are rounded. Prefer 120 BPM (15 f/beat @30, 30 @60).`);
 
 // ---------------------------------------------------------------- math / easing
 const cl = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
@@ -162,7 +186,12 @@ function mulberry32(a) {
 const hash = (a, b = 0) => mulberry32((a * 374761393 + b * 668265263 + SEED * 2246822519) ^ 0x5bd1e995)();
 
 // ---------------------------------------------------------------- palette (roles)
-const P = CONFIG.palette;
+// One default palette (CONFIG.palette) plus optional named ones (CONFIG.palettes),
+// switched per scene by renderFrame. Everything below reads the live `P`.
+const PALETTES = CONFIG.palettes || {};
+const BASE_P = CONFIG.palette || PALETTES[CONFIG.defaultPalette] || Object.values(PALETTES)[0];
+let P = BASE_P;
+const usePalette = name => { P = (name && PALETTES[name]) || BASE_P; };
 const up1 = s => s[0].toUpperCase() + s.slice(1);
 const on = f => P['on' + up1(f)];                        // text on field f
 const hudOn = f => P['hudOn' + up1(f)] || on(f);         // HUD on field f
@@ -200,19 +229,41 @@ let OUTIMG = null;
 
 // ---------------------------------------------------------------- type system
 // spec: { f: 'display'|'mono'|'sans', size, wdth, wght, bold, color, align, ls, stroke, lw }
-const FD = CONFIG.fonts.display, WMIN = (FD.wdth || [100, 100])[0], WMAX = (FD.wdth || [100, 100])[1]; // wdth: null = static-width display font
+// Display faces: fonts.display plus any per-scene `font`. Each is registered
+// under its own family prefix (RD<id>_<wdth> or RD<id>_S for a static face).
+const DISPLAY = [];
+function displayFace(key) {
+  const spec = typeof key === 'string' ? CONFIG.fonts[key] : key || CONFIG.fonts.display;
+  if (!spec) { console.log(`[reel] WARN unknown font "${key}", using fonts.display`); return displayFace(null); }
+  let d = DISPLAY.find(x => x.spec === spec);
+  if (!d) {
+    // A real axis needs a range AND (for Google Fonts) a css2 spec that requests wdth.
+    const axis = !!(spec.wdth && (spec.files || /wdth/.test(spec.css2 || '')));
+    const [wmin, wmax] = spec.wdth || spec.simWdth || [75, 125];
+    d = { id: DISPLAY.length, spec, axis, wmin, wmax, ok: false, cap: 0.72, fallback: spec.fallback || '"Arial Black", Impact, sans-serif' };
+    DISPLAY.push(d);
+  }
+  return d;
+}
+SCENES.forEach(s => { s.df = displayFace(s.font); });
+let DF = displayFace(null), WMIN = DF.wmin, WMAX = DF.wmax;
+let CAP = 0.72;    // cap height / em of the current display face, measured at boot
+const useFont = d => { DF = d; WMIN = d.wmin; WMAX = d.wmax; CAP = d.cap; };
+/** Per-scene look: palette + display face. Called before every scene draw. */
+const useScene = sc => { usePalette(sc.palette); useFont(sc.df); };
 const MONO = `"${CONFIG.fonts.mono.family}", ${CONFIG.fonts.mono.fallback}`;
 const SANS = `"${CONFIG.fonts.sans.family}", ${CONFIG.fonts.sans.fallback}`;
-let VAR = false;   // true once the variable display font is registered per-wdth
-let CAP = 0.72;    // cap height / em of the display font, measured at boot
+const REAL_WDTH = () => DF.ok && DF.axis; // true = font's own wdth axis; false = scaleX stretch
 const wd = sp => cl(sp.wdth ?? 100, WMIN, WMAX);
 function fontOf(sp) {
   if (sp.f === 'mono') return `${sp.bold ? 700 : 400} ${sp.size}px ${MONO}`;
   if (sp.f === 'sans') return `${sp.wght || 500} ${sp.size}px ${SANS}`;
-  return VAR ? `${sp.wght || 900} ${sp.size}px RD${Math.round(wd(sp))}` : `${sp.wght || 900} ${sp.size}px ${FD.fallback}`;
+  const w = sp.wght || 900;
+  if (!DF.ok) return `${w} ${sp.size}px ${DF.fallback}`;
+  return DF.axis ? `${w} ${sp.size}px RD${DF.id}_${Math.round(wd(sp))}` : `${w} ${sp.size}px RD${DF.id}_S`;
 }
-// Without the variable font, width is simulated with a horizontal scale.
-const sx = sp => (!VAR && (sp.f == null || sp.f === 'display') ? wd(sp) / 100 : 1);
+// Without a real wdth axis (static face or fallback), width is simulated with a horizontal scale.
+const sx = sp => (!REAL_WDTH() && (sp.f == null || sp.f === 'display') ? wd(sp) / 100 : 1);
 function strW(ctx, s, sp) { ctx.font = fontOf(sp); ctx.letterSpacing = (sp.ls || 0) + 'px'; const w = ctx.measureText(s).width * sx(sp); ctx.letterSpacing = '0px'; return w; }
 function str(ctx, s, x, y, sp) {
   ctx.save();
@@ -276,18 +327,19 @@ const bg = (ctx, f) => { ctx.fillStyle = P[f]; ctx.fillRect(0, 0, W, H); };
 const p2 = n => String(n).padStart(2, '0');
 
 // ---------------------------------------------------------------- particles (text → particles)
-let NP = 0, PT = null;
-const HERO = { size: 0, step: 3 };
-function initParticles(ctx) {
-  const scene = SCENES.find(s => s.type === 'particles');
-  if (!scene) return;
-  NP = Math.round(CONFIG.particles * cl((W * H) / (1920 * 1080), 0.3, 2));
-  PT = {}; for (const k of ['tx', 'ty', 'cx', 'cy', 'ax', 'ay', 'fx', 'fy', 'px', 'py', 'd', 's']) PT[k] = new Float32Array(NP);
+// One target set per particles scene: `text` (default brand.name) + `accent`
+// (default brand.accentChar; '' for none), in that scene's display face.
+const PARTS = new Map(); // scene id → { NP, PT, step }
+function initParticles() {
+  for (const scene of SCENES.filter(s => s.type === 'particles')) { useScene(scene); PARTS.set(scene.id, buildParticles(scene)); }
+}
+function buildParticles(scene) {
+  const NP = Math.round(CONFIG.particles * cl((W * H) / (1920 * 1080), 0.3, 2));
+  const PT = {}; for (const k of ['tx', 'ty', 'cx', 'cy', 'ax', 'ay', 'fx', 'fy', 'px', 'py', 'd', 's']) PT[k] = new Float32Array(NP);
   PT.acc = new Uint8Array(NP);
-  const [, o] = mk();
-  const word = CONFIG.brand.name, tail = CONFIG.brand.accentChar || '';
+  const [, o] = mk(W, H, true);
+  const word = String(scene.text ?? CONFIG.brand.name), tail = scene.accent ?? CONFIG.brand.accentChar ?? '';
   const size = Math.min(fitSize(o, word + tail, W * 0.76), (H * 0.3) / CAP);
-  HERO.size = size;
   const sp = disp(size, '#fff');
   const w = strW(o, word, sp), total = w + strW(o, tail, sp);
   const x0 = W / 2 - total / 2, base = H * 0.5 + (CAP * size) / 2;
@@ -297,7 +349,6 @@ function initParticles(ctx) {
   let area = 0;
   for (let i = 3; i < img.length; i += 4) if (img[i] > 128) area++;
   const step = Math.sqrt(area / NP) * 0.985;
-  HERO.step = step;
   const cand = [];
   for (let y = step / 2; y < H; y += step) for (let x = step / 2; x < W; x += step) {
     const i = (Math.floor(y) * W + Math.floor(x)) * 4;
@@ -314,7 +365,8 @@ function initParticles(ctx) {
     PT.px[i] = r() * 6.283; PT.py[i] = r() * 6.283;
     PT.d[i] = r(); PT.s[i] = (2.4 + r() * 2.6) * U;
   }
-  console.log(`[reel] particles ${NP} grid step ${step.toFixed(2)} cells ${cand.length}`);
+  console.log(`[reel] particles "${word}${tail}" ${NP} grid step ${step.toFixed(2)} cells ${cand.length}`);
+  return { NP, PT, step };
 }
 
 // ---------------------------------------------------------------- shapes (perimeter resample)
@@ -401,7 +453,7 @@ const curveAt = f => { const i = cl(f) * 1000, i0 = Math.floor(i), i1 = Math.min
 const SCENE_FNS = {};
 
 // ---- LEADER: 3·2·1 countdown, then the action dot irises open ----------------
-SCENE_FNS.leader = { draw(ctx, lb, t, s) {
+SCENE_FNS.leader = { minBeats: () => 4, draw(ctx, lb, t, s) {
   const f = s.field, fg = on(f);
   bg(ctx, f);
   const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.36, big = Math.hypot(W, H);
@@ -440,17 +492,19 @@ SCENE_FNS.leader = { draw(ctx, lb, t, s) {
 } };
 
 // ---- TITLE: one word slams per beat (scale + wdth overshoot + shake) ----------
-SCENE_FNS.title = { draw(ctx, lb, t, s) {
-  const f = s.field, fg = on(f);
+// One word per beat when there is room; words speed up (≥0.35 beat) in short scenes.
+SCENE_FNS.title = { minBeats: s => Math.ceil(s.text.split(' ').length * 0.35 + 2), draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f), L = s.beats;
   bg(ctx, f);
   const words = s.text.split(' ');
+  const step = cl((L - 2) / words.length, 0.35, 1), tw = words.length * step, q = cl((L - tw) / 5, 0.3, 1);
   const lines = PORTRAIT ? words.map(w => [w]) : [words];
   const texts = lines.map(l => l.join(' '));
   const size = Math.min(...texts.map(x => fitSize(ctx, x, W - 2 * M)), (H * 0.5) / (lines.length * 1.15 * CAP));
   const sp = disp(size, fg);
   const space = strW(ctx, ' ', sp), lh = size * CAP * 1.25;
-  const [shx, shy] = shake(lb, words.map((_, i) => i), 16);
-  const zoom = 1 + 0.035 * E.cubicInOut(prog(lb, words.length, 3.5));
+  const [shx, shy] = shake(lb, words.map((_, i) => i * step), 16);
+  const zoom = 1 + 0.035 * E.cubicInOut(prog(lb, tw, Math.max(0.5, (L - tw) * 0.7)));
   const cy = H * 0.44, y0 = cy - ((lines.length - 1) * lh) / 2;
   ctx.save(); ctx.translate(W / 2 + shx, shy); ctx.scale(zoom, zoom);
   let wi = 0, lastBase = 0, maxW = 0;
@@ -461,7 +515,7 @@ SCENE_FNS.title = { draw(ctx, lb, t, s) {
     const base = y0 + li * lh + (CAP * size) / 2;
     lastBase = base;
     line.forEach((w, i) => {
-      const p = prog(lb, wi, 0.42);
+      const p = prog(lb, wi * step, 0.42);
       if (p > 0) {
         const k = lerp(2.3, 1, E.backOut(p, 2.2));
         ctx.save(); ctx.translate(x + ws[i] / 2, base - (CAP * size) / 2); ctx.scale(k, k); ctx.globalAlpha = cl(p / 0.12);
@@ -471,19 +525,21 @@ SCENE_FNS.title = { draw(ctx, lb, t, s) {
       x += ws[i] + space; wi++;
     });
   });
-  const rp = E.expoOut(prog(lb, words.length - 0.6, 0.9));
+  const rp = E.expoOut(prog(lb, tw - 0.6 * step, 0.9));
   ctx.fillStyle = hot(f); ctx.fillRect(-maxW / 2, lastBase + 42 * U, maxW * rp, 14 * U);
   ctx.restore();
-  typeOn(ctx, s.sub || '', W / 2, lastBase + 150 * U, mono(30, fg, { ls: 4 * U, align: 'center' }), prog(lb, words.length, 1.1), hot(f), t);
-  const mp = E.expoOut(prog(lb, words.length + 0.5, 0.8));
-  reveal(ctx, `FOR — ${CONFIG.brand.name}`, M, M + 70 * U, mono(18, fg, { bold: true }), mp);
-  reveal(ctx, s.meta || '', W - M, M + (PORTRAIT ? 110 : 70) * U, mono(18, fg, { align: 'right' }), mp);
-  reveal(ctx, 'NO. 01', M, H - M - 70 * U, mono(18, fg), E.expoOut(prog(lb, words.length + 1, 0.8)));
+  typeOn(ctx, s.sub || '', W / 2, lastBase + 150 * U, mono(30, fg, { ls: 4 * U, align: 'center' }), prog(lb, tw, 1.1 * q), hot(f), t);
+  // corner copy: tl / tr / bl override the defaults
+  const mp = E.expoOut(prog(lb, tw + 0.5 * q, 0.8 * q));
+  reveal(ctx, s.tl ?? `FOR — ${CONFIG.brand.name}`, M, M + 70 * U, mono(18, fg, { bold: true }), mp);
+  reveal(ctx, s.tr ?? s.meta ?? '', W - M, M + (PORTRAIT ? 110 : 70) * U, mono(18, fg, { align: 'right' }), mp);
+  reveal(ctx, s.bl ?? 'NO. 01', M, H - M - 70 * U, mono(18, fg), E.expoOut(prog(lb, tw + q, 0.8 * q)));
 } };
 
 // ---- PALETTE: one hard cut per field, hex slides up per glyph, then columns --
 const FIELDS = ['ink', 'bone', 'action', 'machine'];
 SCENE_FNS.palette = {
+  minBeats: () => 5,
   fieldAt: lb => (lb < 4 ? FIELDS[Math.floor(cl(lb, 0, 3.999))] : 'ink'),
   draw(ctx, lb, t, s) {
     const roles = s.roles || {};
@@ -556,13 +612,13 @@ SCENE_FNS.widthType = { draw(ctx, lb, t, s) {
   ctx.beginPath(); ctx.moveTo(x0, dy); ctx.lineTo(x1, dy); ctx.stroke();
   ctx.fillStyle = hot(f);
   for (const [x, d] of [[x0, 1], [x1, -1]]) { ctx.beginPath(); ctx.moveTo(x, dy); ctx.lineTo(x + d * 14 * U, dy - 7 * U); ctx.lineTo(x + d * 14 * U, dy + 7 * U); ctx.fill(); }
-  const lab = `WDTH ${String(Math.round(wdth)).padStart(3, '0')} · W ${Math.round(w / U)} PX`;
+  const lab = `${REAL_WDTH() ? 'WDTH' : 'SCALEX'} ${String(Math.round(wdth)).padStart(3, '0')} · W ${Math.round(w / U)} PX`;
   const lsp = mono(16, hotText(f), { bold: true, ls: 2 * U, align: 'center' }), lw = strW(ctx, lab, lsp) + 24 * U;
   ctx.fillStyle = P[f]; ctx.fillRect(W / 2 - lw / 2, dy - 14 * U, lw, 28 * U);
   str(ctx, lab, W / 2, dy + 6 * U, lsp);
   // specimen row: the three voices
   const cols = [
-    [CONFIG.fonts.display.family.toUpperCase(), disp(46 * U, fg), `DISPLAY · 900 · WDTH ${WMIN}–${WMAX}`],
+    [DF.spec.family.toUpperCase(), disp(46 * U, fg), `DISPLAY · 900 · ${REAL_WDTH() ? 'WDTH' : 'SCALEX'} ${WMIN}–${WMAX}`],
     [CONFIG.fonts.sans.family, { f: 'sans', size: 46 * U, wght: 600, color: fg }, 'TEXT · SENTENCES · UI'],
     [CONFIG.fonts.mono.family.toUpperCase(), mono(40, fg, { bold: true, ls: 0 }), 'HUD · LABELS · DATA'],
   ];
@@ -575,9 +631,12 @@ SCENE_FNS.widthType = { draw(ctx, lb, t, s) {
   });
 } };
 
-// ---- PARTICLES: noise converges into the brand word ------------------------
-SCENE_FNS.particles = { draw(ctx, lb, t, s) {
-  const f = s.field, fg = on(f);
+// ---- PARTICLES: noise converges into `text` (default: brand name) -----------
+// Timings are fractions of the scene length (tuned at 8 beats; minimum 3).
+SCENE_FNS.particles = { minBeats: () => 3, draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f), L = s.beats;
+  const { NP, PT, step } = PARTS.get(s.id);
+  const c0 = 0.3 * L, cSpread = 0.16 * L, cDur = 0.19 * L, tDone = 0.575 * L, w0 = 0.625 * L;
   bg(ctx, f);
   const tb = lb + s.b0;
   let locked = 0, ent = 0;
@@ -586,21 +645,21 @@ SCENE_FNS.particles = { draw(ctx, lb, t, s) {
     const w = tb * 0.9;
     const x = PT.cx[i] + PT.ax[i] * Math.sin(PT.fx[i] * w + PT.px[i]) + 0.45 * PT.ax[i] * Math.sin(1.7 * PT.fy[i] * w + PT.py[i]);
     const y = PT.cy[i] + PT.ay[i] * Math.cos(PT.fy[i] * w + PT.py[i]) + 0.45 * PT.ay[i] * Math.cos(1.3 * PT.fx[i] * w + PT.px[i]);
-    const p = E.expoInOut(prog(lb, 2.4 + PT.d[i] * 1.3, 1.5));
+    const p = E.expoInOut(prog(lb, c0 + PT.d[i] * cSpread, cDur));
     if (p >= 0.999) locked++;
     ent += 1 - p;
     const jit = p > 0.99 ? Math.sin(t * 0.4 + i) * 0.6 * U : 0;
     const X = lerp(x, PT.tx[i], p) + jit, Y = lerp(y, PT.ty[i], p);
-    const sz = lerp(PT.s[i], HERO.step * 0.8, p);
+    const sz = lerp(PT.s[i], step * 0.8, p);
     (PT.acc[i] ? pathA : pathB).rect(X - sz / 2, Y - sz / 2, sz, sz);
   }
   ctx.fillStyle = fg; ctx.fill(pathB);
   ctx.fillStyle = hot(f); ctx.fill(pathA);
   // state tag: FROM → TO (scramble-decode)
-  const done = lb >= 4.6, label = done ? s.to : s.from;
+  const done = lb >= tDone, label = done ? s.to : s.from;
   const tagSp = mono(20, fg, { bold: true, ls: 5 * U, align: 'center' });
   const tw = strW(ctx, done ? s.to : s.from, tagSp) + 40 * U, tx = W / 2 - tw / 2, ty = M + 50 * U;
-  if (done) { ctx.fillStyle = fg; ctx.fillRect(tx, ty, tw, 44 * U); str(ctx, scramble(label, prog(lb, 4.6, 0.6), Math.floor(t)), W / 2, ty + 30 * U, { ...tagSp, color: P[f] }); }
+  if (done) { ctx.fillStyle = fg; ctx.fillRect(tx, ty, tw, 44 * U); str(ctx, scramble(label, prog(lb, tDone, Math.min(0.6, 0.075 * L)), Math.floor(t)), W / 2, ty + 30 * U, { ...tagSp, color: P[f] }); }
   else {
     ctx.strokeStyle = hot(f); ctx.lineWidth = 2 * U; ctx.strokeRect(tx, ty, tw, 44 * U);
     str(ctx, label, W / 2, ty + 30 * U, { ...tagSp, color: hotText(f) });
@@ -614,28 +673,34 @@ SCENE_FNS.particles = { draw(ctx, lb, t, s) {
   const words = s.words || [], hs = Math.min(96 * U, fitSize(ctx, words.join(' '), W - 2 * M)), hy = H - M - 60 * U;
   const sp = disp(hs, fg), gap = strW(ctx, ' ', sp), wsz = words.map(w => strW(ctx, w, sp));
   let x = W / 2 - (wsz.reduce((a, b) => a + b, 0) + gap * (words.length - 1)) / 2;
+  const stag = cl((L - w0 - 0.6) / Math.max(1, words.length), 0.15, 0.75), wd0 = Math.min(0.5, L / 16);
   words.forEach((w, i) => {
-    const p = E.expoOut(prog(lb, 5 + i * 0.75, 0.5));
+    const p = E.expoOut(prog(lb, w0 + i * stag, wd0));
     if (w.endsWith('.')) {
       const body = w.slice(0, -1);
       reveal(ctx, body, x, hy, sp, p);
-      reveal(ctx, '.', x + strW(ctx, body, sp), hy, { ...sp, color: hot(f) }, E.bounceOut(prog(lb, 5.3 + i * 0.75, 0.6)));
+      reveal(ctx, '.', x + strW(ctx, body, sp), hy, { ...sp, color: hot(f) }, E.bounceOut(prog(lb, w0 + 0.3 * wd0 / 0.5 + i * stag, 0.6 * wd0 / 0.5)));
     } else reveal(ctx, w, x, hy, sp, p);
     x += wsz[i] + gap;
   });
 } };
 
 // ---- ECHO: solid line bounces in, outline copies fan out and collapse --------
-SCENE_FNS.echo = { draw(ctx, lb, t, s) {
-  const f = s.field, fg = on(f), text = s.text;
+// Timings derive from the scene length (tuned at 4 beats; minimum 2).
+SCENE_FNS.echo = { minBeats: () => 2, draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f), text = s.text, L = s.beats, mid = L / 2;
   bg(ctx, f);
-  const wp = lb > 2 ? lerp(100, 72, Math.sin(Math.PI * cl((lb - 2) / 0.9))) : 100;
+  const wp = lb > mid ? lerp(100, 72, Math.sin(Math.PI * cl((lb - mid) / Math.min(0.9, L / 4.4)))) : 100;
   const size = Math.min(fitSize(ctx, text, W - 2 * M * 0.6), (H * 0.3) / CAP);
   const rowH = size * 0.86, cy = H * 0.5, base = (CAP * size) / 2;
-  const [shx, shy] = shake(lb, [0.62, 1, 2, 3], 12);
+  const [shx, shy] = shake(lb, [0.62, ...Array.from({ length: Math.max(0, Math.ceil(L) - 1) }, (_, i) => i + 1)], 12);
   ctx.save(); ctx.translate(W / 2 + shx, cy + shy);
-  const spread = E.expoOut(prog(lb, 0.55, 0.7)), collapse = E.expoIn(prog(lb, 3.45, 0.55));
-  const beatK = Math.floor(cl(lb, 0, 3.99));
+  const spread = E.expoOut(prog(lb, 0.55, 0.7)), collapse = E.expoIn(prog(lb, L - 0.55, 0.55));
+  const beatK = Math.floor(cl(lb, 0, L - 0.01));
+  // Outline copies stay inside the HUD-safe band (clear of the corner text and
+  // timeline); the clip rect is in screen space. The solid line is not clipped.
+  const hudSafe = 112 * U;
+  ctx.save(); ctx.beginPath(); ctx.rect(-W / 2 - shx, hudSafe - cy - shy, W, H - 2 * hudSafe); ctx.clip();
   for (let k = -4; k <= 4; k++) {
     if (!k) continue;
     const hx = beatK >= 1 ? (k % 2 ? 1 : -1) * 110 * U * E.expoOut(prog(lb, beatK, 0.5)) * (beatK % 2 ? 1 : -1) : 0;
@@ -644,22 +709,23 @@ SCENE_FNS.echo = { draw(ctx, lb, t, s) {
     str(ctx, text, 0, base, disp(size, fg, { wdth: wp, align: 'center', stroke: true, lw: 3 * U }));
     ctx.restore();
   }
+  ctx.restore();
   const y = lerp(-cy - size, 0, E.bounceOut(prog(lb, 0, 0.75)));
   ctx.fillStyle = P[f]; // knockout band so the outlines never cross the solid line
   ctx.fillRect(-W, y - (CAP * size) / 2 - 22 * U, W * 2, CAP * size + 44 * U);
   str(ctx, text, 0, y + base, disp(size, fg, { wdth: wp, align: 'center' }));
   ctx.restore();
-  const mp = E.expoOut(prog(lb, 1, 0.6));
+  const sIn = Math.min(1, L / 4), mp = E.expoOut(prog(lb, sIn, 0.6));
   if (mp > 0 && s.strap) {
     const ssp = mono(20, P[f], { bold: true, ls: 4 * U, align: 'center' });
     const tw = Math.min(W - 2 * M, strW(ctx, s.strap, ssp) + 48 * U), sy = H - M - 40 * U;
     ctx.fillStyle = fg; ctx.fillRect(W / 2 - (tw / 2) * mp, sy - 36 * U, tw * mp, 54 * U);
-    reveal(ctx, s.strap, W / 2, sy, ssp, E.expoOut(prog(lb, 1.15, 0.5)));
+    reveal(ctx, s.strap, W / 2, sy, ssp, E.expoOut(prog(lb, sIn + 0.15, 0.5)));
   }
 } };
 
 // ---- MORPH: shape morphs ON the beat, outline echo lags, list tracks it -------
-SCENE_FNS.morph = { draw(ctx, lb, t, s) {
+SCENE_FNS.morph = { minBeats: s => (s.at && s.at.length ? s.at[s.at.length - 1] + 1 : 2), draw(ctx, lb, t, s) {
   const f = s.field, fg = on(f);
   bg(ctx, f);
   const shapes = s.shapes.map(n => (SHAPE_LIB[n] || SHAPE_LIB.circle)()), at = s.at, items = s.items;
@@ -679,7 +745,7 @@ SCENE_FNS.morph = { draw(ctx, lb, t, s) {
   str(ctx, `${NS} PTS · MORPH ${p2(k)}`, cx, cy + Math.min(W, H) * 0.39, mono(15, al(fg, 0.6), { align: 'center' }));
   // label column
   const X = M, top = PORTRAIT ? H * 0.64 : H * 0.23;
-  str(ctx, `${(s.label || 'CHAPTER')} — ${p2(k + 1)} / ${p2(items.length)}`, X, top, mono(20, fg, { bold: true, ls: 4 * U }));
+  str(ctx, `${(s.chapter || 'CHAPTER')} — ${p2(k + 1)} / ${p2(items.length)}`, X, top, mono(20, fg, { bold: true, ls: 4 * U }));
   ctx.fillStyle = hot(f); ctx.fillRect(X, top + 22 * U, 60 * U, 6 * U);
   const size = Math.min(128 * U, fitSize(ctx, 'STRATEGY', (PORTRAIT ? W : W * 0.5) - 2 * M, { wdth: 88 }));
   const ly = top + size * CAP + 70 * U;
@@ -694,7 +760,7 @@ SCENE_FNS.morph = { draw(ctx, lb, t, s) {
 } };
 
 // ---- TUNNEL: faux-3D flight through rotating squares (pinhole camera) -------
-SCENE_FNS.tunnel = { draw(ctx, lb, t, s) {
+SCENE_FNS.tunnel = { minBeats: () => 2, draw(ctx, lb, t, s) {
   const f = s.field, fg = on(f), items = s.items || [];
   bg(ctx, f);
   const N = 30, dz = 170, near = 60, fl = 720 * U, S = 560;
@@ -734,8 +800,9 @@ SCENE_FNS.tunnel = { draw(ctx, lb, t, s) {
 } };
 
 // ---- GRAPH EDITOR: bezier curve draws, handles pop, a dot rides it ----------
-SCENE_FNS.graph = { draw(ctx, lb, t, s) {
-  const f = s.field, fg = on(f), stages = s.stages;
+// Draw/ride timings scale with the scene length (tuned at 8 beats; minimum 3).
+SCENE_FNS.graph = { minBeats: () => 3, draw(ctx, lb, t, s) {
+  const f = s.field, fg = on(f), stages = s.stages, k = Math.max(0.4, s.beats / 8), r0 = 1.2 * k, rd = 4.2 * k;
   bg(ctx, f);
   const { px0, px1, py0, py1 } = CURVE.box;
   const ip = E.expoOut(prog(lb, 0, 0.6));
@@ -749,8 +816,8 @@ SCENE_FNS.graph = { draw(ctx, lb, t, s) {
   ctx.strokeStyle = al(fg, 0.45); ctx.lineWidth = 2 * U;
   ctx.beginPath(); ctx.moveTo(px0, py0 - 20 * U); ctx.lineTo(px0, py1); ctx.lineTo(px1 + 20 * U, py1); ctx.stroke();
   const A = CURVE.anchors;
-  const df = SNAP_EASE(prog(lb, 0.15, 3.2));  // draw fraction
-  const rf = SNAP_EASE(prog(lb, 1.2, 4.2));   // rider fraction
+  const df = SNAP_EASE(prog(lb, 0.15 * k, 3.2 * k));  // draw fraction
+  const rf = SNAP_EASE(prog(lb, r0, rd));             // rider fraction
   const [rx, ry] = curveAt(rf);
   stages.forEach((st, i) => {
     const xa = A[i][0], xb = A[i + 1][0];
@@ -777,14 +844,14 @@ SCENE_FNS.graph = { draw(ctx, lb, t, s) {
     const ap = E.backOut(prog(df, CURVE.anchorF[i] - 0.03, 0.08), 2.5);
     if (ap <= 0) return;
     ctx.save(); ctx.translate(a[0], a[1]); ctx.rotate(Math.PI / 4); ctx.scale(ap * U, ap * U);
-    ctx.fillStyle = rf >= CURVE.anchorF[i] - 0.001 && lb > 1.2 ? hot(f) : P[f]; ctx.strokeStyle = fg; ctx.lineWidth = 3;
+    ctx.fillStyle = rf >= CURVE.anchorF[i] - 0.001 && lb > r0 ? hot(f) : P[f]; ctx.strokeStyle = fg; ctx.lineWidth = 3;
     ctx.fillRect(-11, -11, 22, 22); ctx.strokeRect(-11, -11, 22, 22); ctx.restore();
   });
-  if (lb > 1.2) {
+  if (lb > r0) {
     ctx.strokeStyle = cool(f); ctx.lineWidth = 2 * U; ctx.beginPath(); ctx.moveTo(rx, py0 - 30 * U); ctx.lineTo(rx, py1); ctx.stroke();
     ctx.fillStyle = cool(f); ctx.fillRect(rx - 58 * U, py0 - 62 * U, 116 * U, 32 * U);
     str(ctx, `${String(Math.round(rf * 100)).padStart(3, '0')}% DONE`, rx, py0 - 40 * U, mono(15, f === 'machine' ? P[f] : on('machine'), { bold: true, ls: 1 * U, align: 'center' }));
-    for (let k = 12; k >= 1; k--) { const [qx, qy] = curveAt(SNAP_EASE(prog(lb - k * 0.05, 1.2, 4.2))); ctx.fillStyle = al(hot(f), 0.5 * (1 - k / 13)); ctx.beginPath(); ctx.arc(qx, qy, 16 * U * (1 - k / 16), 0, 7); ctx.fill(); }
+    for (let j = 12; j >= 1; j--) { const [qx, qy] = curveAt(SNAP_EASE(prog(lb - j * 0.05, r0, rd))); ctx.fillStyle = al(hot(f), 0.5 * (1 - j / 13)); ctx.beginPath(); ctx.arc(qx, qy, 16 * U * (1 - j / 16), 0, 7); ctx.fill(); }
     ctx.fillStyle = hot(f); ctx.beginPath(); ctx.arc(rx, ry, 18 * U, 0, 7); ctx.fill();
     ctx.strokeStyle = fg; ctx.lineWidth = 3 * U; ctx.stroke();
   }
@@ -795,7 +862,7 @@ SCENE_FNS.graph = { draw(ctx, lb, t, s) {
     ctx.strokeStyle = fg; ctx.lineWidth = 3 * U; ctx.beginPath();
     for (let i = 0; i <= 60; i++) { const u = i / 60, q = [bx + u * bs, by + bs - SNAP_EASE(u) * bs]; i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); }
     ctx.stroke();
-    const eu = prog(lb, 1.2, 4.2);
+    const eu = prog(lb, r0, rd);
     ctx.fillStyle = hot(f); ctx.beginPath(); ctx.arc(bx + eu * bs, by + bs - SNAP_EASE(eu) * bs, 7 * U, 0, 7); ctx.fill();
     str(ctx, 'EASE', bx + bs + 14 * U, by + 14 * U, mono(13, fg, { bold: true, ls: 2 * U }));
     ctx.globalAlpha = 1;
@@ -803,13 +870,15 @@ SCENE_FNS.graph = { draw(ctx, lb, t, s) {
 } };
 
 // ---- END CARD: wordmark letters rise, dot bounces, held breath, final hit ----
-SCENE_FNS.end = { draw(ctx, lb, t, s) {
+// Build-up timings scale with the beats before the final hit (tuned at 8; minimum 3).
+SCENE_FNS.end = { minBeats: () => 3, draw(ctx, lb, t, s) {
   const f = s.field, fg = on(f);
   bg(ctx, f);
   const n = Math.round(t);
   if (n >= SILENCE_F0 && n < FINAL_F) return; // the held breath (audio is silent too)
   const finalLb = FINAL_BEAT - s.b0, hit = lb >= finalLb, hp = hit ? prog(lb, finalLb, 1) : 0;
-  const word = CONFIG.brand.name, tail = CONFIG.brand.accentChar || '';
+  const k = cl(Math.min(s.beats - 1, finalLb) / 7, 0.3, 1);
+  const word = String(s.text ?? CONFIG.brand.name), tail = s.accent ?? CONFIG.brand.accentChar ?? '';
   const size = Math.min(fitSize(ctx, word + tail, W - 2 * M * 1.6), (H * 0.26) / CAP);
   const sp = disp(size, fg), ww = strW(ctx, word, sp), total = ww + strW(ctx, tail, sp);
   const wx = W / 2 - total / 2, cy = H * 0.43, base = cy + (CAP * size) / 2;
@@ -818,21 +887,21 @@ SCENE_FNS.end = { draw(ctx, lb, t, s) {
   ctx.save(); ctx.beginPath(); ctx.rect(0, base - CAP * size - 40 * U, W, CAP * size + 80 * U); ctx.clip();
   let x = wx;
   [...word].forEach((ch, i) => {
-    const e = E.expoOut(prog(lb, i * 0.07, 0.7));
+    const e = E.expoOut(prog(lb, i * 0.07 * k, 0.7 * k));
     str(ctx, ch, x, base + (1 - e) * (CAP * size + 60 * U), sp);
     x += strW(ctx, ch, sp);
   });
   ctx.restore();
-  const dotP = E.bounceOut(prog(lb, 0.9, 0.8));
+  const dotP = E.bounceOut(prog(lb, 0.9 * k, 0.8 * k));
   ctx.globalAlpha = cl(dotP * 4);
   str(ctx, tail, wx + ww, base - (1 - dotP) * 600 * U, { ...sp, color: hot(f) });
   ctx.globalAlpha = 1;
   ctx.restore();
-  const ry = base + 70 * U, rp = E.expoOut(prog(lb, 1.5, 1)), rw = Math.max(total, W * 0.4);
+  const ry = base + 70 * U, rp = E.expoOut(prog(lb, 1.5 * k, k)), rw = Math.max(total, W * 0.4);
   ctx.fillStyle = al(fg, 0.9); ctx.fillRect(wx, ry, rw * rp, 2 * U);
   ctx.fillStyle = hot(f); ctx.fillRect(wx, ry - 3 * U, 90 * U * rp, 8 * U);
-  typeOn(ctx, CONFIG.brand.tagline, wx, ry + 60 * U, mono(PORTRAIT ? 18 : 24, fg, { bold: true, ls: 4 * U }), prog(lb, 1.9, 1.1), hot(f), t);
-  const lp = E.expoOut(prog(lb, 3, 0.8));
+  typeOn(ctx, CONFIG.brand.tagline, wx, ry + 60 * U, mono(PORTRAIT ? 18 : 24, fg, { bold: true, ls: 4 * U }), prog(lb, 1.9 * k, 1.1 * k), hot(f), t);
+  const lp = E.expoOut(prog(lb, 3 * k, 0.8 * k));
   ctx.globalAlpha = lp; str(ctx, CONFIG.brand.line, wx, ry + 132 * U + (1 - lp) * 16 * U, { f: 'sans', size: 34 * U, wght: 500, color: al(fg, 0.85) }); ctx.globalAlpha = 1;
   if (hit) { // shockwave from the accent glyph
     const dcx = wx + ww + strW(ctx, tail, sp) / 2, dcy = base - size * 0.08, r = 20 * U + E.expoOut(hp) * Math.hypot(W, H) * 0.7;
@@ -842,6 +911,70 @@ SCENE_FNS.end = { draw(ctx, lb, t, s) {
     ctx.beginPath(); ctx.arc(dcx, dcy, r * 0.7, 0, 7); ctx.stroke();
   }
 } };
+
+// ---- COUNTERS: big numbers count up, one landing per beat; mono labels -------
+// items: [{ value, decimals?, prefix?, suffix?, label }]. Use REAL numbers only.
+SCENE_FNS.counters = {
+  minBeats: s => Math.max(2, Math.ceil((s.items || []).length * 0.5 + 1)),
+  draw(ctx, lb, t, s) {
+    const f = s.field, fg = on(f), items = s.items || [], n = Math.max(1, items.length), L = s.beats;
+    bg(ctx, f);
+    const step = Math.min(1, (L - 1) / n), dur = Math.max(0.35, step * 0.85); // stat i starts on beat i·step
+    const fmt = (it, v) => (it.prefix || '') + Number(v.toFixed(it.decimals || 0)).toLocaleString('en-US', { minimumFractionDigits: it.decimals || 0, maximumFractionDigits: it.decimals || 0, useGrouping: it.group !== false }) + (it.suffix || '');
+    const ip = E.expoOut(prog(lb, 0, 0.5));
+    if (s.title) reveal(ctx, s.title, M, M + 110 * U, disp(Math.min(84 * U, fitSize(ctx, s.title, W * 0.5)), fg, { wdth: lerp(WMIN, 100, ip) }), ip);
+    const colW = PORTRAIT ? W - 2 * M : (W - 2 * M) / n, rowH = PORTRAIT ? (H * 0.56) / n : 0;
+    // one shared size so the row reads as a set: widest final value fits its column
+    const size = Math.min(...items.map(it => fitSize(ctx, fmt(it, it.value), colW - 56 * U, { wdth: 100 })), (PORTRAIT ? rowH * 0.5 : H * 0.3) / CAP);
+    items.forEach((it, i) => {
+      const t0 = i * step, e = E.expoOut(prog(lb, t0, dur)), vis = E.expoOut(prog(lb, t0, 0.3));
+      const x = PORTRAIT ? M : M + i * colW, base = PORTRAIT ? H * 0.3 + i * rowH + CAP * size : H * 0.62;
+      if (vis <= 0) return;
+      str(ctx, `${p2(i + 1)} / ${p2(n)}`, x, base - CAP * size - 28 * U, mono(15, al(fg, 0.7), { ls: 3 * U }));
+      reveal(ctx, fmt(it, it.value * e), x, base, disp(size, fg, { wdth: lerp(WMIN, 100, e) }), vis);
+      const ry = base + Math.max(26 * U, size * 0.24); // clear of descenders (commas)
+      ctx.fillStyle = hot(f); ctx.fillRect(x, ry, (colW - 56 * U) * e, 6 * U);
+      reveal(ctx, it.label || '', x, ry + 46 * U, mono(20, fg, { bold: true, ls: 4 * U }), E.expoOut(prog(lb, t0 + 0.15, 0.5)));
+    });
+  },
+};
+
+// ---- FRAMES: a pre-rendered image sequence as the field (shader + kinetic) --
+// Render a shader page with --keep-frames (e.g. riso-reel.html → out/riso_frames/),
+// then point `src` at that folder. `offset` = source frame shown at scene start.
+// prepare() fetches the image BEFORE drawing (renderFrame returns its Promise and
+// render.js awaits it), so draw() stays a pure function of the frame.
+// Kinetic copy (`text`, `sub`) sits on a solid ink plate, never on the screened image.
+let FRAME = { url: null, img: null };
+const frameUrl = (s, n) => `${String(s.src || 'out/riso_frames/').replace(/\/?$/, '/')}${String((s.offset || 0) + n - bf(s.b0)).padStart(5, '0')}.${s.ext || 'jpg'}`;
+SCENE_FNS.frames = {
+  blur: 1, // the images already carry their own motion; subframes would only cost time
+  async prepare(n, s) {
+    const url = frameUrl(s, n);
+    if (FRAME.url === url) return;
+    const img = await fetch(url).then(r => (r.ok ? r.blob() : null)).then(b => (b ? createImageBitmap(b) : null)).catch(() => null);
+    if (!img) console.error(`[reel] frames: missing ${url}`);
+    if (FRAME.img && FRAME.img.close) FRAME.img.close();
+    FRAME = { url, img };
+  },
+  draw(ctx, lb, t, s) {
+    const f = s.field, img = FRAME.img;
+    bg(ctx, f);
+    if (img) { const k = Math.max(W / img.width, H / img.height), w = img.width * k, h = img.height * k; ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h); }
+    if (!s.text) return;
+    const L = s.beats, ip = E.expoOut(prog(lb, 0.25, 0.6)), op = E.expoIn(prog(lb, L - 0.6, 0.5));
+    if (ip <= 0 || op >= 1) return;
+    const ts = Math.min(96 * U, fitSize(ctx, s.text, W * 0.55, { wdth: 100 })), tsp = disp(ts, on('ink'), { wdth: 100 });
+    const ssp = mono(18, on('ink'), { bold: true, ls: 3 * U });
+    const pw = Math.max(strW(ctx, s.text, tsp), s.sub ? strW(ctx, s.sub, ssp) : 0) + 72 * U, ph = ts * CAP + (s.sub ? 118 : 72) * U;
+    const px = M, py = H - M - 70 * U - ph;
+    ctx.save(); ctx.beginPath(); ctx.rect(px, py + ph * op, pw * ip, ph * (1 - op)); ctx.clip();
+    ctx.fillStyle = P.ink; ctx.fillRect(px, py, pw, ph);
+    str(ctx, s.text, px + 36 * U, py + 36 * U + ts * CAP, tsp);
+    if (s.sub) str(ctx, s.sub, px + 36 * U, py + ph - 34 * U, ssp);
+    ctx.restore();
+  },
+};
 
 // ============================================================================
 // POST: glitch (RGB split + slices), vignette, grain, HUD
@@ -895,9 +1028,10 @@ function hud(n, sc) {
   ctx.stroke();
   const sp = mono(15, col, { bold: true, ls: 2.5 * U }), ty = 72 * U, by = H - 60 * U, x0 = 64 * U, x1 = W - 64 * U;
   const secs = Math.floor(n / FPS), beat = Math.min(TOTAL_BEATS, Math.floor(n / FPB) + 1);
-  str(ctx, `${CONFIG.brand.name} / ${CONFIG.brand.reelName}`, x0, ty, sp);
+  const title = CONFIG.title ?? `${CONFIG.brand.name} / ${CONFIG.brand.reelName}`;
+  str(ctx, sc.palette ? `${title} · PALETTE: ${String(sc.palette).toUpperCase()}` : title, x0, ty, sp);
   str(ctx, `TC 00:${p2(Math.floor(secs / 60))}:${p2(secs % 60)}:${p2(n % FPS)}`, x1, ty, { ...sp, align: 'right' });
-  str(ctx, `SCENE ${p2(sc.id)} / ${p2(SCENES.length - 1)} — ${sc.type.toUpperCase()}`, x0, by, sp);
+  str(ctx, `SCENE ${p2(sc.id + 1)} / ${p2(SCENES.length)} — ${sc.label}`, x0, by, sp);
   const br = PORTRAIT ? `BEAT ${p2(beat)}/${TOTAL_BEATS}` : `${W}×${H} · ${FPS}FPS · ${BPM}BPM · BEAT ${p2(beat)}/${TOTAL_BEATS}`;
   str(ctx, br, x1, by, { ...sp, align: 'right' });
   const pulse = Math.exp(-fract(n / FPB) * 5); // beat pip flashes on every beat
@@ -914,9 +1048,17 @@ function hud(n, sc) {
 // ============================================================================
 function sceneAt(n) { for (let i = SCENES.length - 1; i >= 0; i--) if (n >= bf(SCENES[i].b0)) return SCENES[i]; return SCENES[0]; }
 function segmentOf(n) { let a = 0, b = TOTAL; for (const c of CUT_FRAMES) { if (c <= n) a = c; else { b = c; break; } } return [a, b]; }
+// Sync by default; returns a Promise when the scene has an async prepare() step
+// (render.js awaits either). Per-scene palette + display face are applied first.
 window.renderFrame = function (n) {
-  const sc = sceneAt(n), [s0, s1] = segmentOf(n), fn = SCENE_FNS[sc.type].draw;
-  const S = BLUR, b0f = sc.b0 * FPB;
+  const sc = sceneAt(n), prep = SCENE_FNS[sc.type].prepare;
+  useScene(sc);
+  if (prep) return prep(n, sc).then(() => { useScene(sc); drawFrame(n, sc); });
+  drawFrame(n, sc);
+};
+function drawFrame(n, sc) {
+  const [s0, s1] = segmentOf(n), def = SCENE_FNS[sc.type], fn = def.draw;
+  const S = Math.max(1, Math.min(BLUR, Math.round(sc.blur ?? def.blur ?? BLUR))), b0f = sc.b0 * FPB;
   if (S === 1) {
     mctx.save(); fn(mctx, n / FPB - sc.b0, n, sc); mctx.restore();
   } else {
@@ -945,10 +1087,9 @@ window.renderFrame = function (n) {
     rgbSplit(Math.round(22 * amt * U), Math.round(3 * amt * U * (hash(n, 1) - 0.5)));
     slices(amt, n);
   }
-  vignette();
-  grain(n);
+  if (sc.post !== false) { vignette(); grain(n); }
   hud(n, sc);
-};
+}
 
 // ============================================================================
 // boot: fonts → measure → precompute → READY
@@ -957,9 +1098,12 @@ const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeo
 // Canvas can't set font-variation-settings. Trick: register the SAME variable
 // font file once per integer wdth, each FontFace pinned to one `stretch`
 // value, named RD62…RD125. The browser clamps the wdth axis to that value.
-async function loadDisplay() {
+// A face without a wdth axis is registered once (RD<id>_S) and stretched with scaleX.
+async function loadDisplay(d) {
+  const FD = d.spec;
   let blocks = FD.files || null;
   if (!blocks) {
+    if (!FD.css2) throw new Error('no css2 or files for ' + FD.family);
     const css = await (await fetch(`https://fonts.googleapis.com/css2?family=${FD.css2}&display=block`)).text();
     blocks = css.split('/*').slice(1)
       .map(b => ({ name: b.slice(0, b.indexOf('*/')).trim(), url: (b.match(/url\(([^)]+)\)/) || [])[1], unicodeRange: (b.match(/unicode-range:\s*([^;]+);/) || [])[1] }))
@@ -968,8 +1112,10 @@ async function loadDisplay() {
   if (!blocks.length) throw new Error('no display font files');
   for (const bl of blocks) {
     const data = await (await fetch(bl.url)).arrayBuffer();
+    const desc = { weight: '100 900', ...(bl.unicodeRange ? { unicodeRange: bl.unicodeRange } : {}) };
     const faces = [];
-    for (let w = WMIN; w <= WMAX; w++) faces.push(new FontFace('RD' + w, data, { stretch: w + '%', weight: '100 900', ...(bl.unicodeRange ? { unicodeRange: bl.unicodeRange } : {}) }));
+    if (d.axis) for (let w = Math.floor(d.wmin); w <= Math.ceil(d.wmax); w++) faces.push(new FontFace(`RD${d.id}_${w}`, data, { ...desc, stretch: w + '%' }));
+    else faces.push(new FontFace(`RD${d.id}_S`, data, desc));
     await Promise.all(faces.map(f => f.load()));
     faces.forEach(f => document.fonts.add(f));
   }
@@ -981,8 +1127,9 @@ async function loadFonts() {
     document.head.appendChild(l);
     await withTimeout(new Promise(r => { l.onload = r; l.onerror = r; }), 8000).catch(() => {});
   }
-  try { await withTimeout(loadDisplay(), 20000); VAR = true; }
-  catch (e) { console.log('[reel] display font fallback (' + e.message + ') — width simulated with scaleX'); }
+  await Promise.all(DISPLAY.map(d => withTimeout(loadDisplay(d), 20000)
+    .then(() => { d.ok = true; if (!d.axis) console.log(`[reel] display "${d.spec.family}" has no wdth axis: width moves use scaleX ${d.wmin}–${d.wmax}`); })
+    .catch(e => console.log(`[reel] display "${d.spec.family}" fallback (${e.message}): width simulated with scaleX`))));
   await withTimeout(Promise.all([
     document.fonts.load(`400 20px ${MONO}`, 'A→×'), document.fonts.load(`700 20px ${MONO}`, 'A→×'),
     document.fonts.load(`500 20px ${SANS}`, 'Aa'), document.fonts.load(`600 20px ${SANS}`, 'Aa'),
@@ -991,16 +1138,24 @@ async function loadFonts() {
 }
 (async () => {
   await loadFonts();
-  mctx.font = fontOf({ size: 1000 }); CAP = mctx.measureText('H').actualBoundingBoxAscent / 1000 || 0.72;
-  initParticles(mctx); initGrain(); initCurve();
-  console.log(`[reel] ready ${W}x${H}@${FPS} frames=${TOTAL} beats=${TOTAL_BEATS} CAP=${CAP.toFixed(3)} VAR=${VAR} blur=${BLUR}`);
+  for (const d of DISPLAY) { useFont(d); mctx.font = fontOf({ size: 1000 }); d.cap = mctx.measureText('H').actualBoundingBoxAscent / 1000 || 0.72; }
+  for (const s of SCENES) {
+    const def = SCENE_FNS[s.type];
+    if (!def) throw new Error(`unknown scene type "${s.type}" (scene ${s.id + 1})`);
+    if (s.palette && !PALETTES[s.palette]) console.log(`[reel] WARN scene ${s.id + 1} palette "${s.palette}" not in CONFIG.palettes, using CONFIG.palette`);
+    const min = def.minBeats ? def.minBeats(s) : 1;
+    if (s.beats < min) console.log(`[reel] WARN scene ${s.id + 1} "${s.label}" (${s.type}) has ${s.beats} beats, below its minimum of ${min}: timings are compressed and may read too fast`);
+  }
+  initParticles(); initGrain(); initCurve();
+  useScene(SCENES[0]);
+  console.log(`[reel] ready ${W}x${H}@${FPS} frames=${TOTAL} beats=${TOTAL_BEATS} fpb=${+FPB.toFixed(4)} display=${DISPLAY.map(d => `${d.spec.family}:${d.ok ? (d.axis ? 'wdth' : 'scaleX') : 'fallback'}@${d.cap.toFixed(3)}`).join(',')} blur=${BLUR}`);
   window.READY = true;
   if (Q.has('play')) { // live preview only — NOT deterministic, never used by render.js
     document.body.classList.add('play');
     const t0 = performance.now();
     const tick = now => { renderFrame(Math.floor(((now - t0) / 1000) * FPS) % TOTAL); requestAnimationFrame(tick); };
     requestAnimationFrame(tick);
-  } else if (Q.has('frame')) renderFrame(Number(Q.get('frame')));
+  } else if (Q.has('frame')) await renderFrame(Number(Q.get('frame')));
 })().catch(e => console.error('[reel] boot failed ' + (e && e.stack)));
 </script>
 </body>

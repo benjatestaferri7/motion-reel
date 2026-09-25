@@ -44,7 +44,10 @@ action → `spot`.
   `scenes`, …
 - It sets `window.READY`/`window.__ready`.
 - It exposes `window.renderFrame(n, fps?)`. The call is synchronous and a pure function of
-  `n`: the scene is drawn and `gl.finish()` has run when it returns.
+  `n`: the scene is drawn and `gl.finish()` has run when it returns. (`render.js` also
+  accepts pages whose `renderFrame` returns a Promise.)
+- It defaults to 30 fps (`CONFIG.fps`, or `?fps=` / `--fps`): 120 BPM gives 15 whole frames
+  per beat (30 at 60 fps). 30 beats = 450 frames at 30 fps.
 - It draws into `canvas#c`, created with `preserveDrawingBuffer`, so `toDataURL` works.
 - Deterministic mode switches on automatically under puppeteer (`navigator.webdriver`), or
   with `?render`.
@@ -52,11 +55,17 @@ action → `spot`.
 ```bash
 cp assets/shader/riso-reel.html <project>/reel/        # next to render.js
 cd <project>/reel
-node render.js --page riso-reel.html --out out/riso.mp4                         # 1920x1080@60
-node render.js --page riso-reel.html --out out/prev.mp4 --width 960 --height 540 --fps 30
-node render.js --page riso-reel.html --stills 0,300,450,540,690,780 --out out/stills
-python3 make_audio.py --timing out/timing.json --out out/audio.wav              # beat-synced bed
+node render.js --page riso-reel.html --out out/riso.mp4                         # 1920x1080@30
+node render.js --page riso-reel.html --out out/riso60.mp4 --fps 60              # or 60 fps
+node render.js --page "riso-reel.html?q=med" --out out/prev.mp4 --width 960 --height 540
+node render.js --page riso-reel.html --stills 0,150,225,270,345,390 --out out/stills
+python3 make_audio.py --timing out/riso.timing.json --out out/audio.wav         # beat-synced bed
 ```
+
+`render.js` writes the beat table as `<out>.timing.json` (here `out/riso.timing.json`), so a
+riso render never overwrites the Swiss reel's timing in the same folder. To cut riso footage
+into a Swiss reel, add `--keep-frames` and use the template's `frames` scene
+(`assets/video/reel-template/README.md` §2b).
 
 The loop is seamless: frame `totalFrames` equals frame 0 (grain aside). A GIF or MP4 can
 loop forever.

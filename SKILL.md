@@ -4,7 +4,7 @@ description: "Trigger: motion reel, showreel, kinetic type, Swiss motion, riso/h
 license: Apache-2.0
 metadata:
   author: "benjatestaferri7"
-  version: "1.0"
+  version: "1.1"
 ---
 
 ## Activation Contract

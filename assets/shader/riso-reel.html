@@ -35,8 +35,8 @@ const CONFIG = {
   // and map  bone -> paper,  ink -> ink,  action -> spot  (machine is unused).
   palette: { paper: '#EDEAE3', ink: '#0B0B0D', spot: '#FF3B1F' },
 
-  width: 1920, height: 1080, fps: 60,       // deterministic render size / rate
-  bpm: 120, durationBeats: 30,              // 30 beats @120 = 15 s seamless loop
+  width: 1920, height: 1080, fps: 30,       // deterministic render size / rate (?fps= / --fps override)
+  bpm: 120, durationBeats: 30,              // 30 beats @120 = 15 s seamless loop; 15 frames/beat @30, 30 @60
   seed: 7,                                  // sphere layout / rain order
   sphereCount: 150,                         // hard max 160 (UBO size)
 
@@ -522,6 +522,8 @@ function createChoreography(seed) {
 
   const W0 = qn('w', CONFIG.width), H0 = qn('h', CONFIG.height);
   const TOTAL = Math.round(DURATION * FPS);
+  const FPB = SPB * FPS;
+  if (Math.abs(FPB - Math.round(FPB)) > 1e-6) console.log(`[reel] WARN ${CONFIG.bpm} BPM @ ${FPS} fps = ${FPB.toFixed(4)} frames/beat (not whole); prefer 120 BPM at 30 or 60 fps.`);
   const scaleBeats = b => +(b / MB).toFixed(3);
   window.REEL = {
     width: W0, height: H0, fps: FPS, bpm: CONFIG.bpm, totalBeats: BEATS, totalFrames: TOTAL, duration: TOTAL / FPS,

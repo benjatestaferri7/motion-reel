@@ -8,7 +8,7 @@
   "scripts": {
     "preview": "node render.js --out out/preview.mp4 --duration 4 --width 960 --height 540 --blur 1",
     "stills": "node render.js --stills 0,60,150,240,330,420,510,600,690,780,870 --out out/stills --blur 4",
-    "audio": "python3 make_audio.py --timing out/timing.json --out out/audio.wav",
+    "audio": "python3 make_audio.py --timing out/reel.timing.json --out out/audio.wav",
     "render": "node render.js --out out/reel.mp4",
     "mux": "ffmpeg -y -i out/reel.mp4 -i out/audio.wav -c:v copy -c:a aac -b:a 320k -shortest -movflags +faststart out/reel-final.mp4",
     "vertical": "node render.js --out out/reel-9x16.mp4 --width 1080 --height 1920",

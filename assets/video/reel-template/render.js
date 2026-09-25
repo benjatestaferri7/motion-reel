@@ -5,14 +5,19 @@
 // Serves this folder over HTTP, launches N headless Chrome/Brave/Chromium
 // instances (puppeteer-core, no bundled browser), each rendering a disjoint
 // stride of frames via window.renderFrame(n) → canvas.toDataURL → JPEG/PNG,
-// then encodes with ffmpeg (H.264, yuv420p, +faststart) and optionally muxes
-// a WAV. Also writes timing.json (beat table) for make_audio.py.
+// then encodes with ffmpeg (H.264, yuv420p limited/TV range, BT.709 tags,
+// +faststart) and optionally muxes a WAV. Also writes <out>.timing.json (beat
+// table) next to the output, for make_audio.py --timing.
+//
+// renderFrame(n) may be synchronous or return a Promise (e.g. a scene that
+// fetches pre-rendered shader frames before drawing); render.js awaits it.
 //
 // Usage
 //   node render.js --out out/reel.mp4                       full reel, config size
 //   node render.js --out out/preview.mp4 --duration 2 --width 960 --height 540 --blur 1
 //   node render.js --out out/reel.mp4 --audio out/audio.wav --workers 6
 //   node render.js --stills 0,150,300 --out out/stills       PNG stills only (QA)
+//   node render.js --page "riso-reel.html?q=med" --out out/riso.mp4   another page (+ its own query)
 //   node render.js --out out/vertical.mp4 --width 1080 --height 1920
 //
 // Flags
@@ -25,7 +30,8 @@
 //   --crf N           x264 quality (lower = better/larger)             [16]
 //   --format jpg|png  intermediate frames                              [jpg]
 //   --keep-frames     keep the frame folder after encoding
-//   --page FILE       page to render                                   [index.html]
+//   --page FILE       page to render, may carry its own ?query          [index.html]
+//                     (CLI --width/--height/--fps/--blur/--seed override it)
 //   --browser PATH    browser executable (else $BROWSER_PATH / $CHROME_PATH / auto-detect)
 //   --which-browser   print the detected browser + launch flags, then exit
 //
@@ -130,10 +136,12 @@ const server = http.createServer((req, res) => {
 });
 
 // ---------------------------------------------------------------- page helpers
+// URL API, so a --page that already has a query string (riso-reel.html?q=med)
+// gets merged params instead of a second "?".
 function pageUrl(port) {
-  const q = new URLSearchParams();
-  for (const [flagName, key] of [['width', 'w'], ['height', 'h'], ['fps', 'fps'], ['blur', 'blur'], ['seed', 'seed']]) if (opt(flagName) !== undefined) q.set(key, opt(flagName));
-  return `http://127.0.0.1:${port}/${opt('page', 'index.html')}?${q}`;
+  const u = new URL(opt('page', 'index.html').replace(/^\/+/, ''), `http://127.0.0.1:${port}/`);
+  for (const [flagName, key] of [['width', 'w'], ['height', 'h'], ['fps', 'fps'], ['blur', 'blur'], ['seed', 'seed']]) if (opt(flagName) !== undefined) u.searchParams.set(key, opt(flagName));
+  return u.href;
 }
 
 async function openPage(exe, port, wid) {
@@ -146,7 +154,8 @@ async function openPage(exe, port, wid) {
     defaultViewport: { width: num('width', 1920), height: num('height', 1080), deviceScaleFactor: 1 },
   });
   const page = await browser.newPage();
-  page.on('console', m => { const t = m.text(); if (m.type() === 'error' || t.startsWith('[reel]')) console.log(`[w${wid}]`, t); });
+  // [reel] boot logs/warnings print once (probe page); errors from every worker.
+  page.on('console', m => { const t = m.text(); if (m.type() === 'error' || (wid === 'p' && t.startsWith('[reel]'))) console.log(`[w${wid}]`, t); });
   page.on('pageerror', e => console.log(`[w${wid}] PAGEERROR`, e.message));
   await page.goto(pageUrl(port), { waitUntil: 'load' });
   await page.waitForFunction('window.READY === true', { timeout: 120000 });
@@ -158,8 +167,8 @@ async function worker(exe, port, list, wid, dir, fmt) {
   const t0 = Date.now();
   let done = 0;
   for (const n of list) {
-    const b64 = await page.evaluate((n, fmt) => {
-      window.renderFrame(n);
+    const b64 = await page.evaluate(async (n, fmt) => {
+      await window.renderFrame(n); // sync or async (Promise) renderFrame both work
       const c = document.getElementById('c');
       return fmt === 'png' ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.95);
     }, n, fmt);
@@ -186,7 +195,11 @@ async function worker(exe, port, list, wid, dir, fmt) {
   const out = path.resolve(opt('out', stills ? 'out/stills' : 'out/reel.mp4'));
   const outDir = stills ? out : path.dirname(out);
   fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(path.join(outDir, 'timing.json'), JSON.stringify(REEL, null, 2));
+  // Beat table next to the output, named after it (out/reel.mp4 → out/reel.timing.json),
+  // so rendering another page into the same folder never clobbers this reel's timing.
+  const timingPath = path.join(path.dirname(out), path.basename(out, path.extname(out)) + '.timing.json');
+  fs.writeFileSync(timingPath, JSON.stringify(REEL, null, 2));
+  console.log('timing:', timingPath);
 
   const fps = REEL.fps;
   let frames;
@@ -215,7 +228,11 @@ async function worker(exe, port, list, wid, dir, fmt) {
   const audio = opt('audio');
   const args = ['-y', '-loglevel', 'error', '-framerate', String(fps), '-start_number', String(frames[0]), '-i', path.join(framesDir, `%05d.${fmt}`)];
   if (audio) args.push('-ss', String(frames[0] / fps), '-i', path.resolve(audio));
-  args.push('-c:v', 'libx264', '-preset', 'slow', '-crf', String(num('crf', 16)), '-pix_fmt', 'yuv420p', '-movflags', '+faststart');
+  // JPEG frames decode as full-range yuvj420p; convert explicitly to limited (TV)
+  // range BT.709 yuv420p and tag it, or players show crushed/washed-out levels.
+  args.push('-vf', 'scale=out_color_matrix=bt709:out_range=tv,format=yuv420p',
+    '-c:v', 'libx264', '-preset', 'slow', '-crf', String(num('crf', 16)), '-pix_fmt', 'yuv420p',
+    '-color_range', 'tv', '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-movflags', '+faststart');
   if (audio) args.push('-c:a', 'aac', '-b:a', '320k', '-shortest');
   args.push(out);
   execFileSync('ffmpeg', args, { stdio: 'inherit' });

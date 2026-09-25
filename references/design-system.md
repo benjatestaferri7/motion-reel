@@ -75,7 +75,7 @@ Mono: Space Mono, JetBrains Mono, Geist Mono, Martian Mono (wdth 75–112.5), IB
 
 ## 6. Frame furniture
 
-- HUD in 4 corners on every scene: brand/title (TL), timecode `TC 00:00:SS:FF` (TR), `SCENE 03/10 — NAME` (BL), `1920×1080 · 60FPS · 128BPM · BEAT 12/64` (BR). Thin corner brackets.
+- HUD in 4 corners on every scene: brand/title (TL), timecode `TC 00:00:SS:FF` (TR), `SCENE 03/10 — NAME` (BL), `1920×1080 · 30FPS · 120BPM · BEAT 12/60` (BR). Thin corner brackets.
 - Finish: fine grain (per-frame offset), soft vignette, subframe motion blur (video only).
 - Freeze-frame test: every frame must work as a poster.
 
